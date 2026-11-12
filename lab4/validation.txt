@@ -1,0 +1,53 @@
+ECE 470 Lab 4 validation — 2026-10-15
+Repository: /home/xliu173/ece470
+Base revision: 839462c (origin/main)
+
+ROS 2 Jazzy build:
+  source /opt/ros/jazzy/setup.bash
+  cd ece470lab/lab_files
+  colcon --log-base .lab4-log build --base-paths src --build-base .lab4-build --install-base .lab4-install --symlink-install
+Result: 1 package finished successfully.
+
+Automated tests (from repository root, ROS environment sourced):
+  python3 -m pytest -q lab4/test_lab4.py lab4/test_lab4_exec.py
+Result: 24 passed in 0.65s.
+Includes 200 deterministic FK-generated targets, all waist quadrants,
+workspace boundaries, encoder offsets, yaw wrapping, invalid commands,
+no-ROS dry runs, feedback ordering, and quintic trajectory dynamics.
+
+Installed entry point:
+  source ece470lab/lab_files/.lab4-install/local_setup.bash
+  ros2 run ece470labs lab4_exec 0.1 0.1 0.15 90 --dry-run
+Result: exit 0; world gripper position [0.1, 0.1, 0.15] m.
+IK/FK position residual: 8.235e-16 m.
+Encoder angles in degrees:
+  [128.55368512, -98.24118341, 127.00030097, -118.75911757, -90.0, -51.44631488]
+
+Additional installed-command smoke checks:
+  Missing yaw: exit 2 before ROS initialization.
+  Unreachable (2,2,2,90): exit 2 before ROS initialization.
+  NaN x coordinate: exit 2 before ROS initialization.
+  Wrapped yaw 450 degrees with --dry-run: exit 0.
+  --dry-run with ROS node remapping arguments: exit 0.
+
+Report generation:
+  python3 lab4/generate_report.py
+Result: six proposed poses checked; maximum FK residual 3.039e-15 m.
+Five-page PDF exported and visually inspected; three original diagrams included.
+
+At the time of the software-only checks above, no physical trajectory had been
+executed by the assistant. The user subsequently supplied two physical-run logs
+and ruler measurements; see experiment_runs.csv and experiment_terminal_logs.txt.
+TA sign-off has not been supplied.
+Numerical FK residuals do not measure physical robot accuracy.
+
+Recorded experiment data checks — 2026-10-15
+  Two user-reported bench runs and ruler measurements saved.
+  P1 measured XYZ: (0.265, 0.328, 0.227) m.
+  P2 measured XYZ: (0.182, -0.100, 0.068) m.
+  P2 units interpreted as centimeters consistently with P1.
+  Position errors independently checked against sqrt(38) and sqrt(68) mm.
+  Logged encoder angles agree with recomputed IK angles within 1e-8 degrees.
+  All local Markdown links resolve; shared text files contain English prose.
+  Original six unmeasured candidate points preserved in proposed_poses.csv.
+  Updated report exported successfully; original terminal records retained.

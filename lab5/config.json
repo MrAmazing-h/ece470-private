@@ -1,0 +1,119 @@
+{
+  "simulation_only": false,
+  "camera": {
+    "beta": 641.7243965631948,
+    "theta": -0.0654575072821331,
+    "tx": -0.2316441062031388,
+    "ty": -0.14319698039608697,
+    "width": 640,
+    "height": 480,
+    "flip_horizontal": false
+  },
+  "vision": {
+    "hsv": {
+      "green": [
+        [
+          45,
+          100,
+          80
+        ],
+        [
+          75,
+          255,
+          255
+        ]
+      ],
+      "yellow": [
+        [
+          15,
+          140,
+          150
+        ],
+        [
+          32,
+          255,
+          255
+        ]
+      ],
+      "orange": [
+        [
+          4,
+          130,
+          130
+        ],
+        [
+          18,
+          255,
+          255
+        ]
+      ]
+    },
+    "roi": [
+      230,
+      140,
+      500,
+      340
+    ],
+    "area_px": [
+      180,
+      1200
+    ],
+    "morphology_kernel": 3,
+    "flip_horizontal": false
+  },
+  "task": {
+    "block_height_m": 0.031,
+    "table_z_m": 0.0,
+    "contact_offset_m": -0.002,
+    "pickup_offset_m": {
+      "green": 0.0,
+      "yellow": -0.003
+    },
+    "safe_z_m": 0.15,
+    "yaw_deg": 90.0,
+    "stack_xy_m": {
+      "green": [
+        0.2,
+        0.1
+      ],
+      "yellow": [
+        0.3,
+        0.1
+      ]
+    },
+    "workspace_xy_m": [
+      0.1,
+      0.5,
+      0.05,
+      0.5
+    ],
+    "expected_blocks": 4,
+    "max_per_color": 3,
+    "settle_seconds": 5.0,
+    "frame_max_age_seconds": 1.0,
+    "go_away_encoder_deg": [
+      270,
+      -90,
+      90,
+      -90,
+      -90,
+      135
+    ],
+    "stack_clearance_m": 0.05
+  },
+  "gripper": {
+    "output_pin": 0,
+    "analog_pin": 0,
+    "threshold": 2.0,
+    "holding_above_threshold": true,
+    "timeout_seconds": 1.5,
+    "debounce_seconds": 0.15,
+    "max_age_seconds": 0.5
+  },
+  "motion": {
+    "velocity_limit": 0.5,
+    "acceleration_limit": 0.4,
+    "joint_tolerance_rad": 0.003,
+    "feedback_max_age_seconds": 1.0
+  }
+}

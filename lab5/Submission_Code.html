@@ -1,0 +1,1457 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>ECE 470 Lab 5 Code Submission</title><style>
+@page { size: letter; margin: .7in; }
+body { font: 11pt serif; } h1 { font-size: 18pt; } h2 { font: 11pt monospace; overflow-wrap: anywhere; }
+section { break-before: page; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 8.5pt/1.2 monospace; }
+</style><h1>ECE 470 Lab 5 Code Submission</h1>
+<p>Name: [fill in] &nbsp; NetID: xliu173<br>Partner: [fill in] &nbsp; TA: [fill in]<br>Section: [fill in]</p>
+<p>Includes the vision code, camera calibration fitter, Lab 5 task/ROS code,
+shared Lab 4 kinematics, package metadata, and current bench configuration.
+Regenerate this document after final calibration and tuning.</p>
+<p>Generated UTC: 2026-11-12T16:49:10.397041+00:00</p><section><h2>ece470lab/lab_files/src/ece470labs/ece470labs/blob_search.py</h2><pre>#!/usr/bin/env python
+
+import cv2
+import numpy as np
+from dataclasses import dataclass, asdict
+import math
+
+# Measured starting profile, 2026-11-12; main may override it from config.json.
+NATIVE_VISION_DEFAULTS = {
+    &#x27;hsv&#x27;: {&#x27;green&#x27;: [[45, 100, 80], [75, 255, 255]],
+            &#x27;yellow&#x27;: [[15, 140, 150], [32, 255, 255]],
+            &#x27;orange&#x27;: [[5, 150, 150], [18, 255, 255]]},
+    &#x27;roi&#x27;: [100, 160, 570, 355],
+    &#x27;area_px&#x27;: [180, 1200], &#x27;morphology_kernel&#x27;: 3,
+}
+
+@dataclass(frozen=True)
+class CameraCalibration:
+    &quot;&quot;&quot;Appendix B: camera_xy = Rcw(theta) @ world_xy + [tx, ty].
+
+    Camera x increases with image row; camera y with column. beta is px/m,
+    theta is radians, and translations are meters in the camera frame.
+    Pixel coordinates always refer to the FULL, optionally flipped image.
+    &quot;&quot;&quot;
+
+    beta: float
+    theta: float
+    tx: float
+    ty: float
+    width: int = 640
+    height: int = 480
+    flip_horizontal: bool = False
+
+    def __post_init__(self):
+        &quot;&quot;&quot;Reject missing or invalid calibration values.&quot;&quot;&quot;
+        values = [self.beta, self.theta, self.tx, self.ty]
+        if any(v is None or not math.isfinite(float(v)) for v in values):
+            raise ValueError(&#x27;Camera is not calibrated: measure beta, theta, tx and ty.&#x27;)
+        if self.beta &lt;= 0:
+            raise ValueError(&#x27;Camera beta must be positive, in pixels per meter.&#x27;)
+        if any(not isinstance(v, int) or isinstance(v, bool) or v &lt;= 0
+               for v in [self.width, self.height]):
+            raise ValueError(&#x27;Camera image size must contain positive integer dimensions.&#x27;)
+        if not isinstance(self.flip_horizontal, bool):
+            raise ValueError(&#x27;Camera flip_horizontal must be boolean.&#x27;)
+
+    @classmethod
+    def from_dict(cls, values):
+        &quot;&quot;&quot;Load the measured camera section from JSON.&quot;&quot;&quot;
+        return cls(**values)
+
+    def image_to_world(self, col, row):
+        &quot;&quot;&quot;Map full-image (column,row) pixels to world meters.&quot;&quot;&quot;
+        if not np.all(np.isfinite([col, row])):
+            raise ValueError(&#x27;Pixel coordinates must be finite.&#x27;)
+        camera = np.array([(row-self.height/2)/self.beta-self.tx,
+                           (col-self.width/2)/self.beta-self.ty])
+        c, s = math.cos(self.theta), math.sin(self.theta)
+        return tuple((np.array([[c, s], [-s, c]]) @ camera).tolist())
+
+
+@dataclass(frozen=True)
+class Detection:
+    color: str
+    col: float
+    row: float
+    world_xy: tuple | None = None
+
+    def as_dict(self):
+        &quot;&quot;&quot;Serialize one detection for run records.&quot;&quot;&quot;
+        return asdict(self)
+
+
+def fit_calibration(pixels, world, width=640, height=480,
+                    flip_horizontal=False, max_error_m=0.005):
+    &quot;&quot;&quot;Fit the Appendix B rigid planar map plus scale from measured pairs.
+
+    At least three non-collinear pairs are required to expose reflected axes.
+    Residuals are training-point errors, not independent physical validation.
+    &quot;&quot;&quot;
+    pixels, world = np.asarray(pixels, dtype=float), np.asarray(world, dtype=float)
+    if (pixels.ndim != 2 or pixels.shape[1:] != (2,) or len(pixels) &lt; 3 or
+            world.shape != pixels.shape or not np.all(np.isfinite(pixels)) or
+            not np.all(np.isfinite(world))):
+        raise ValueError(&#x27;Need at least three finite pixel/world point pairs.&#x27;)
+    if not math.isfinite(max_error_m) or max_error_m &lt;= 0:
+        raise ValueError(&#x27;Maximum calibration error must be positive.&#x27;)
+    if (np.any(pixels &lt; 0) or np.any(pixels[:, 0] &gt;= width) or
+            np.any(pixels[:, 1] &gt;= height)):
+        raise ValueError(&#x27;Calibration pixels must be inside the full image size.&#x27;)
+    camera_pixels = pixels[:, ::-1]-[height/2, width/2]
+    x, y = world-world.mean(axis=0), camera_pixels-camera_pixels.mean(axis=0)
+    for points in [x, y]:
+        singular = np.linalg.svd(points, compute_uv=False)
+        if singular[0] &lt;= 0 or singular[1] &lt; singular[0]*1e-3:
+            raise ValueError(&#x27;Calibration pairs are collinear or nearly collinear.&#x27;)
+    u, singular, vt = np.linalg.svd(x.T @ y)
+    rotation = vt.T @ u.T
+    if np.linalg.det(rotation) &lt; 0:
+        raise ValueError(&#x27;Calibration axes are reflected; check row/column, signs and flip.&#x27;)
+    scale = singular.sum()/np.sum(x*x)
+    translation = (camera_pixels.mean(axis=0)-scale*rotation @ world.mean(axis=0))/scale
+    calibration = CameraCalibration(float(scale), math.atan2(rotation[1, 0], rotation[0, 0]),
+                                    *translation.tolist(), width, height, flip_horizontal)
+    predicted = np.array([calibration.image_to_world(*p) for p in pixels])
+    errors = np.linalg.norm(predicted-world, axis=1)
+    if errors.max() &gt; max_error_m:
+        raise ValueError(f&#x27;Calibration residual {errors.max()*1000:.2f} mm exceeds limit; check measurements/units.&#x27;)
+    return calibration, errors
+
+
+# ========================= Student&#x27;s code starts here =========================
+
+# Params for camera calibration
+theta = 0.0
+beta = 0.0
+tx = 0.0
+ty = 0.0
+
+# Function that converts image coord to world coord
+def IMG2W(col, row, calibration=None):
+    &quot;&quot;&quot;OpenCV (column,row) to world meters; refuse unmeasured zero defaults.&quot;&quot;&quot;
+    if calibration is None:
+        calibration = CameraCalibration(beta, theta, tx, ty)
+    return calibration.image_to_world(col, row)
+
+# ========================= Student&#x27;s code ends here ===========================
+
+def blob_search(image_raw, color, *, calibration=None, show=True, return_details=False,
+                vision=None):
+    &quot;&quot;&quot;Use a color-specific HSV mask and return full-image block centroids.&quot;&quot;&quot;
+    if image_raw is None or image_raw.ndim != 3 or image_raw.shape[2] != 3:
+        raise ValueError(&#x27;Expected a BGR image.&#x27;)
+    vision = NATIVE_VISION_DEFAULTS if vision is None else vision
+    if color not in vision[&#x27;hsv&#x27;]:
+        raise ValueError(&#x27;Unknown color: &#x27;+str(color))
+
+    # Setup SimpleBlobDetector parameters.
+    params = cv2.SimpleBlobDetector_Params()
+
+    # ========================= Student&#x27;s code starts here =========================
+
+    # Filter by Color
+    params.filterByColor = True
+    params.blobColor = 255
+
+    # Filter by Area.
+    params.filterByArea = True
+    params.minArea, params.maxArea = map(float, vision[&#x27;area_px&#x27;])
+    if not 0 &lt; params.minArea &lt; params.maxArea:
+        raise ValueError(&#x27;Invalid blob area limits.&#x27;)
+
+    # Filter by Circularity
+    params.filterByCircularity = True
+    params.minCircularity = 0.55
+    params.maxCircularity = 1.0
+
+    # Filter by Inerita
+    params.filterByInertia = True
+    params.minInertiaRatio = 0.45
+
+    # Filter by Convexity
+    params.filterByConvexity = True
+    params.minConvexity = 0.85
+
+    # ========================= Student&#x27;s code ends here ===========================
+
+    # Create a detector with the parameters
+    detector = cv2.SimpleBlobDetector_create(params)
+
+    # Convert the image into the HSV color space
+    hsv_image = cv2.cvtColor(image_raw, cv2.COLOR_BGR2HSV)
+
+    # ========================= Student&#x27;s code starts here =========================
+
+    lower, upper = vision[&#x27;hsv&#x27;][color]
+    if (len(lower) != 3 or len(upper) != 3 or
+            any(not 0 &lt;= a &lt;= b &lt;= limit for a, b, limit in zip(lower, upper, [179, 255, 255]))):
+        raise ValueError(&#x27;Invalid HSV bounds for &#x27;+color)
+
+    # Define a mask using the lower and upper bounds of the target color
+    mask_image = cv2.inRange(hsv_image, np.array(lower, np.uint8), np.array(upper, np.uint8))
+    roi = vision.get(&#x27;roi&#x27;)
+    if roi is not None:
+        x0, y0, x1, y1 = map(int, roi)
+        if not 0 &lt;= x0 &lt; x1 &lt;= image_raw.shape[1] or not 0 &lt;= y0 &lt; y1 &lt;= image_raw.shape[0]:
+            raise ValueError(&#x27;ROI must be inside the full image.&#x27;)
+        selected = np.zeros_like(mask_image)
+        selected[y0:y1, x0:x1] = mask_image[y0:y1, x0:x1]
+        mask_image = selected
+    size = int(vision.get(&#x27;morphology_kernel&#x27;, 3))
+    if size &gt; 1:
+        kernel = np.ones((size, size), np.uint8)
+        mask_image = cv2.morphologyEx(mask_image, cv2.MORPH_OPEN, kernel)
+        mask_image = cv2.morphologyEx(mask_image, cv2.MORPH_CLOSE, kernel)
+
+    # ========================= Student&#x27;s code ends here ===========================
+
+    keypoints = detector.detect(mask_image)
+
+    # Find blob centers in the image coordinates
+    blob_image_center = []
+    num_blobs = len(keypoints)
+    for i in range(num_blobs):
+        blob_image_center.append((keypoints[i].pt[0],keypoints[i].pt[1]))
+
+    # ========================= Student&#x27;s code starts here =========================
+
+    # Draw the keypoints on the detected block
+    im_with_keypoints = cv2.drawKeypoints(image_raw, keypoints, None, (0,255,0) )
+
+    # ========================= Student&#x27;s code ends here ===========================
+
+    xw_yw = []
+
+    if(num_blobs == 0):
+        pass
+    else:
+        # Convert image coordinates to global world coordinate using IM2W() function
+        for i in range(num_blobs):
+            if calibration is not None:
+                xw_yw.append(IMG2W(*blob_image_center[i], calibration))
+            elif return_details:
+                xw_yw.append(None)
+            else:
+                xw_yw.append(IMG2W(*blob_image_center[i]))
+
+
+    if show:
+        cv2.imshow(&quot;Camera View&quot;, image_raw)
+        cv2.imshow(&quot;Mask View: &quot; + color, mask_image)
+        cv2.imshow(&quot;Keypoint View: &quot; + color, im_with_keypoints)
+        cv2.waitKey(2)
+
+    if return_details:
+        detections = [Detection(color, *pixel, xy)
+                      for pixel, xy in zip(blob_image_center, xw_yw)]
+        return image_raw.copy(), im_with_keypoints, {color: mask_image}, detections
+
+    return xw_yw
+
+
+def analyze_native_image(image_raw, settings, calibration=None):
+    &quot;&quot;&quot;Main Lab 5 path: the starter&#x27;s blob_search, for both colors, one frame.&quot;&quot;&quot;
+    if image_raw is None or image_raw.ndim != 3 or image_raw.shape[2] != 3:
+        raise ValueError(&#x27;Expected a BGR image.&#x27;)
+    flip = bool(settings[&#x27;vision&#x27;].get(&#x27;flip_horizontal&#x27;, False))
+    if calibration is not None:
+        if image_raw.shape[:2] != (calibration.height, calibration.width):
+            raise ValueError(&#x27;Image size differs from calibration; recalibrate.&#x27;)
+        if flip != calibration.flip_horizontal:
+            raise ValueError(&#x27;Image flip differs from calibration; recalibrate.&#x27;)
+    image = cv2.flip(image_raw, 1) if flip else image_raw.copy()
+    overlay, masks, blocks = image.copy(), {}, []
+    for color in [&#x27;green&#x27;, &#x27;yellow&#x27;]:
+        _, _, color_masks, detections = blob_search(
+            image, color, calibration=calibration, show=False, return_details=True,
+            vision=settings[&#x27;vision&#x27;])
+        masks.update(color_masks)
+        blocks.extend(detections)
+        for d in detections:
+            cv2.circle(overlay, (round(d.col), round(d.row)), 5, (0, 255, 255), 1)
+            label = f&#x27;{color}: ({d.col:.1f},{d.row:.1f})px&#x27;
+            if d.world_xy is not None:
+                label += f&#x27; ({d.world_xy[0]:.3f},{d.world_xy[1]:.3f})m&#x27;
+            cv2.putText(overlay, label, (round(d.col)+8, round(d.row)),
+                        cv2.FONT_HERSHEY_SIMPLEX, .35, (255, 255, 255), 1)
+    return image, overlay, masks, blocks
+
+
+&quot;&quot;&quot;
+beta = 660
+&quot;&quot;&quot;
+</pre></section><section><h2>ece470lab/lab_files/src/ece470labs/ece470labs/lab5_func.py</h2><pre>&quot;&quot;&quot;Lab 5 configuration, preflight planning, and pick/place sequencing.&quot;&quot;&quot;
+
+import copy
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+from .blob_search import CameraCalibration, NATIVE_VISION_DEFAULTS
+from .lab_func import forward_kinematics, lab_ik_angles
+
+
+DEFAULT_SETTINGS = {
+    &#x27;simulation_only&#x27;: False,
+    &#x27;camera&#x27;: {&#x27;beta&#x27;: None, &#x27;theta&#x27;: None, &#x27;tx&#x27;: None, &#x27;ty&#x27;: None,
+               &#x27;width&#x27;: 640, &#x27;height&#x27;: 480, &#x27;flip_horizontal&#x27;: False},
+    &#x27;vision&#x27;: {**copy.deepcopy(NATIVE_VISION_DEFAULTS), &#x27;flip_horizontal&#x27;: False},
+    &#x27;task&#x27;: {
+        &#x27;block_height_m&#x27;: None, &#x27;table_z_m&#x27;: 0.0, &#x27;contact_offset_m&#x27;: 0.0,
+        &#x27;pickup_offset_m&#x27;: {&#x27;green&#x27;: 0.0, &#x27;yellow&#x27;: 0.0},
+        &#x27;safe_z_m&#x27;: 0.15, &#x27;yaw_deg&#x27;: 90.0,
+        &#x27;stack_xy_m&#x27;: {&#x27;green&#x27;: None, &#x27;yellow&#x27;: None},
+        &#x27;workspace_xy_m&#x27;: None,
+        &#x27;stack_clearance_m&#x27;: 0.05,
+        &#x27;expected_blocks&#x27;: 4, &#x27;max_per_color&#x27;: 3,
+        &#x27;settle_seconds&#x27;: 5.0, &#x27;frame_max_age_seconds&#x27;: 1.0,
+        &#x27;go_away_encoder_deg&#x27;: [270, -90, 90, -90, -90, 135],
+    },
+    &#x27;gripper&#x27;: {&#x27;output_pin&#x27;: 0, &#x27;analog_pin&#x27;: 0, &#x27;threshold&#x27;: 2.0,
+                &#x27;holding_above_threshold&#x27;: True, &#x27;timeout_seconds&#x27;: 1.5,
+                &#x27;debounce_seconds&#x27;: 0.15, &#x27;max_age_seconds&#x27;: 0.5},
+    &#x27;motion&#x27;: {&#x27;velocity_limit&#x27;: 0.5, &#x27;acceleration_limit&#x27;: 0.4,
+               &#x27;joint_tolerance_rad&#x27;: 0.003, &#x27;feedback_max_age_seconds&#x27;: 1.0},
+}
+
+
+def default_settings():
+    &quot;&quot;&quot;Return independent settings with unmeasured fields left empty.&quot;&quot;&quot;
+    return copy.deepcopy(DEFAULT_SETTINGS)
+
+
+def load_settings(path=None):
+    &quot;&quot;&quot;Merge a bench JSON file and reject unknown configuration keys.&quot;&quot;&quot;
+    result = default_settings()
+    if path:
+        with Path(path).open() as stream:
+            supplied = json.load(stream)
+        def merge(target, source):
+            for key, value in source.items():
+                if key not in target:
+                    raise ValueError(&#x27;Unknown configuration key: &#x27;+str(key))
+                if isinstance(target[key], dict) and isinstance(value, dict):
+                    merge(target[key], value)
+                else:
+                    target[key] = value
+        merge(result, supplied)
+    return result
+
+
+def save_settings(path, settings):
+    &quot;&quot;&quot;Write settings without accepting NaN or infinity.&quot;&quot;&quot;
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2, allow_nan=False)+&#x27;\n&#x27;)
+
+
+def _finite(value, label):
+    &quot;&quot;&quot;Require a measured finite numeric value.&quot;&quot;&quot;
+    if value is None or not math.isfinite(float(value)):
+        raise ValueError(&#x27;Set a finite &#x27;+label+&#x27; in the configuration.&#x27;)
+    return float(value)
+
+
+def inside_workspace(xy, workspace):
+    &quot;&quot;&quot;Check world XY against [xmin,xmax,ymin,ymax], in meters.&quot;&quot;&quot;
+    return workspace[0] &lt;= xy[0] &lt;= workspace[1] and workspace[2] &lt;= xy[1] &lt;= workspace[3]
+
+
+def validate_motion_settings(settings):
+    &quot;&quot;&quot;Reject missing calibration, placement sites, or invalid motion limits.&quot;&quot;&quot;
+    calibration = CameraCalibration.from_dict(settings[&#x27;camera&#x27;])
+    if bool(settings[&#x27;vision&#x27;][&#x27;flip_horizontal&#x27;]) != calibration.flip_horizontal:
+        raise ValueError(&#x27;Image flip differs from the measured calibration.&#x27;)
+    task, grip, motion = settings[&#x27;task&#x27;], settings[&#x27;gripper&#x27;], settings[&#x27;motion&#x27;]
+    height = _finite(task[&#x27;block_height_m&#x27;], &#x27;task.block_height_m&#x27;)
+    if height &lt;= 0:
+        raise ValueError(&#x27;Block height must be positive.&#x27;)
+    for key in [&#x27;table_z_m&#x27;, &#x27;contact_offset_m&#x27;, &#x27;safe_z_m&#x27;, &#x27;yaw_deg&#x27;,
+                &#x27;settle_seconds&#x27;, &#x27;frame_max_age_seconds&#x27;]:
+        _finite(task[key], &#x27;task.&#x27;+key)
+    for key in [&#x27;expected_blocks&#x27;, &#x27;max_per_color&#x27;]:
+        if not isinstance(task[key], int) or task[key] &lt;= 0:
+            raise ValueError(&#x27;task.&#x27;+key+&#x27; must be a positive integer.&#x27;)
+    if task[&#x27;expected_blocks&#x27;] &gt; 2*task[&#x27;max_per_color&#x27;]:
+        raise ValueError(&#x27;Expected count exceeds the two stack capacities.&#x27;)
+    if task[&#x27;settle_seconds&#x27;] &lt; 0 or task[&#x27;frame_max_age_seconds&#x27;] &lt;= 0:
+        raise ValueError(&#x27;Image timing values are invalid.&#x27;)
+    surface = task[&#x27;table_z_m&#x27;]+task[&#x27;contact_offset_m&#x27;]
+    if surface+height &lt;= task[&#x27;table_z_m&#x27;]:
+        raise ValueError(&#x27;Contact offset must not put the cup below the table.&#x27;)
+    for color in [&#x27;green&#x27;, &#x27;yellow&#x27;]:
+        offset = _finite(task.get(&#x27;pickup_offset_m&#x27;, {}).get(color, 0.0),
+                         &#x27;task.pickup_offset_m.&#x27;+color)
+        if surface+height+offset &lt;= task[&#x27;table_z_m&#x27;]:
+            raise ValueError(&#x27;Pickup offset must not put the cup below the table.&#x27;)
+    if task[&#x27;safe_z_m&#x27;] &lt;= max(task[&#x27;table_z_m&#x27;], surface)+height*task[&#x27;max_per_color&#x27;]+0.02:
+        raise ValueError(&#x27;safe_z_m must clear a full stack by more than 0.02 m.&#x27;)
+    bounds = task[&#x27;workspace_xy_m&#x27;]
+    if bounds is None or len(bounds) != 4 or not np.all(np.isfinite(bounds)):
+        raise ValueError(&#x27;Set task.workspace_xy_m to [xmin,xmax,ymin,ymax] in measured world meters.&#x27;)
+    if bounds[0] &gt;= bounds[1] or bounds[2] &gt;= bounds[3]:
+        raise ValueError(&#x27;Workspace bounds are reversed.&#x27;)
+    if _finite(task[&#x27;stack_clearance_m&#x27;], &#x27;task.stack_clearance_m&#x27;) &lt;= 0:
+        raise ValueError(&#x27;Stack clearance must be positive.&#x27;)
+    for color in [&#x27;green&#x27;, &#x27;yellow&#x27;]:
+        xy = task[&#x27;stack_xy_m&#x27;][color]
+        if xy is None or len(xy) != 2 or not np.all(np.isfinite(xy)) or not inside_workspace(xy, bounds):
+            raise ValueError(&#x27;Set task.stack_xy_m.&#x27;+color+&#x27; inside the measured workspace.&#x27;)
+    if np.linalg.norm(np.array(task[&#x27;stack_xy_m&#x27;][&#x27;green&#x27;])-task[&#x27;stack_xy_m&#x27;][&#x27;yellow&#x27;]) &lt; 0.04:
+        raise ValueError(&#x27;Stack centers must be separated by at least 0.04 m; allow for actual block size.&#x27;)
+    away = task[&#x27;go_away_encoder_deg&#x27;]
+    if len(away) != 6 or not np.all(np.isfinite(away)) or max(abs(float(v)) for v in away) &gt; 360:
+        raise ValueError(&#x27;go_away_encoder_deg needs six finite encoder angles within +/-360 degrees.&#x27;)
+    for key in [&#x27;velocity_limit&#x27;, &#x27;acceleration_limit&#x27;, &#x27;joint_tolerance_rad&#x27;, &#x27;feedback_max_age_seconds&#x27;]:
+        if _finite(motion[key], &#x27;motion.&#x27;+key) &lt;= 0:
+            raise ValueError(&#x27;Motion limits and timing must be positive.&#x27;)
+    _finite(grip[&#x27;threshold&#x27;], &#x27;gripper.threshold&#x27;)
+    for key in [&#x27;timeout_seconds&#x27;, &#x27;max_age_seconds&#x27;, &#x27;debounce_seconds&#x27;]:
+        if _finite(grip[key], &#x27;gripper.&#x27;+key) &lt;= 0:
+            raise ValueError(&#x27;Gripper timing must be positive.&#x27;)
+    for key in [&#x27;output_pin&#x27;, &#x27;analog_pin&#x27;]:
+        if not isinstance(grip[key], int) or not 0 &lt;= grip[key] &lt;= 17:
+            raise ValueError(&#x27;Invalid gripper pin: &#x27;+key)
+    return calibration
+
+
+def encoder_angles(xyz, yaw):
+    &quot;&quot;&quot;Solve with the existing Lab 4 geometry and independently check FK.&quot;&quot;&quot;
+    angles = lab_ik_angles(*xyz, yaw)
+    transform = forward_kinematics(*angles)
+    rad = math.radians(yaw)
+    expected = [[math.cos(rad), -math.sin(rad), 0],
+                [math.sin(rad), math.cos(rad), 0], [0, 0, 1]]
+    if (np.linalg.norm(transform[:3, 3]/1000-np.array(xyz)) &gt; 1e-8 or
+            not np.allclose(transform[:3, :3], expected, atol=1e-8, rtol=0)):
+        raise ValueError(&#x27;IK/FK verification failed for &#x27;+str(xyz))
+    encoders = (np.array(angles)+[math.pi, 0, 0, -math.pi/2, 0, 0]).tolist()
+    if max(abs(value) for value in encoders) &gt; 2*math.pi+1e-8:
+        raise ValueError(&#x27;Planned encoder angle exceeds +/-360 degrees.&#x27;)
+    return encoders
+
+
+def waypoints(start_xy, target_xyz, settings, color=None):
+    &quot;&quot;&quot;Apply a color-specific pickup offset; keep placement heights independent.&quot;&quot;&quot;
+    task = settings[&#x27;task&#x27;]
+    pick_z = task[&#x27;table_z_m&#x27;]+task[&#x27;block_height_m&#x27;]+task[&#x27;contact_offset_m&#x27;]
+    pick_z += task.get(&#x27;pickup_offset_m&#x27;, {}).get(color, 0.0)
+    safe_z = task[&#x27;safe_z_m&#x27;]
+    return [(&#x27;source_above&#x27;, [*start_xy, safe_z]),
+            (&#x27;source_pick&#x27;, [*start_xy, pick_z]),
+            (&#x27;source_lift&#x27;, [*start_xy, safe_z]),
+            (&#x27;target_above&#x27;, [*target_xyz[:2], safe_z]),
+            (&#x27;target_place&#x27;, list(target_xyz)),
+            (&#x27;target_lift&#x27;, [*target_xyz[:2], safe_z])]
+
+
+def vertical_targets(start_xyz, target_xyz, step_m=0.06):
+    &quot;&quot;&quot;Use at most three vertical segments; horizontal transfer stays elevated.&quot;&quot;&quot;
+    target = np.array(target_xyz, dtype=float)
+    if start_xyz is None or np.linalg.norm(target[:2]-np.array(start_xyz)[:2]) &gt;= 1e-8:
+        return [target]
+    start = np.array(start_xyz, dtype=float)
+    count = min(3, max(1, math.ceil(abs(target[2]-start[2])/step_m)))
+    return [start+(target-start)*i/count for i in range(1, count+1)]
+
+
+def stack_target(color, completed, settings):
+    &quot;&quot;&quot;Place on the next layer using successful placements only.&quot;&quot;&quot;
+    task = settings[&#x27;task&#x27;]
+    return [*task[&#x27;stack_xy_m&#x27;][color], task[&#x27;table_z_m&#x27;]+task[&#x27;contact_offset_m&#x27;]+
+            (completed+1)*task[&#x27;block_height_m&#x27;]]
+
+
+def plan_tasks(detections, settings):
+    &quot;&quot;&quot;Freeze both colors and validate all paths, including skipped-pick heights.&quot;&quot;&quot;
+    validate_motion_settings(settings)
+    task = settings[&#x27;task&#x27;]
+    selected = [d for d in detections if d.color in [&#x27;green&#x27;, &#x27;yellow&#x27;]]
+    outside = [d for d in selected if d.world_xy is None or
+               not inside_workspace(d.world_xy, task[&#x27;workspace_xy_m&#x27;])]
+    if outside:
+        raise ValueError(&#x27;Detected blocks outside the configured workspace or without world coordinates. Adjust ROI/calibration.&#x27;)
+    if len(selected) != task[&#x27;expected_blocks&#x27;]:
+        raise ValueError(f&quot;Expected {task[&#x27;expected_blocks&#x27;]} blocks; detected {len(selected)}. Check masks and ROI.&quot;)
+    for index, block in enumerate(selected):
+        for other in selected[index+1:]:
+            if np.linalg.norm(np.array(block.world_xy)-other.world_xy) &lt; 0.01:
+                raise ValueError(&#x27;Overlapping block detections: check color selection; one object may be detected twice.&#x27;)
+    for color, target in task[&#x27;stack_xy_m&#x27;].items():
+        if any(np.linalg.norm(np.array(block.world_xy)-target) &lt; task[&#x27;stack_clearance_m&#x27;]
+               for block in selected):
+            raise ValueError(f&#x27;Keep the {color} stack site empty: move source blocks at least &#x27;
+                             f&quot;{task[&#x27;stack_clearance_m&#x27;]*100:.0f} cm from its center.&quot;)
+    selected.sort(key=lambda d: (d.color, d.world_xy[0], d.world_xy[1]))
+    for color in [&#x27;green&#x27;, &#x27;yellow&#x27;]:
+        count = sum(d.color == color for d in selected)
+        if count &gt; task[&#x27;max_per_color&#x27;]:
+            raise ValueError(&#x27;Too many &#x27;+color+&#x27; blocks for the configured stack.&#x27;)
+        for detection in [d for d in selected if d.color == color]:
+            for level in range(count):
+                target = stack_target(color, level, settings)
+                previous = None
+                for _, xyz in waypoints(detection.world_xy, target, settings, detection.color):
+                    for sample in vertical_targets(previous, xyz):
+                        encoder_angles(sample, task[&#x27;yaw_deg&#x27;])
+                    previous = xyz
+    return selected
+
+
+def move_block_vision(robot, start_xy, target_xyz, settings, color=None):
+    &quot;&quot;&quot;Return False for a missing source block; abort other hardware failures.
+
+    The robot adapter supplies move_xyz, suction, wait_for_grip,
+    grip_confirmed, emit, and a carrying flag. No ROS dependency is needed here.
+    &quot;&quot;&quot;
+    points = dict(waypoints(start_xy, target_xyz, settings, color))
+    def move(name):
+        if not robot.move_xyz(points[name]):
+            raise RuntimeError(&#x27;Motion failed at &#x27;+name)
+    robot.suction(False)
+    if not robot.wait_for_grip(False):
+        raise RuntimeError(&#x27;Vacuum did not release before pickup; check suction feedback.&#x27;)
+    move(&#x27;source_above&#x27;)
+    move(&#x27;source_pick&#x27;)
+    robot.suction(True)
+    if not robot.wait_for_grip(True):
+        print(&#x27;no block found&#x27;, flush=True)
+        robot.suction(False)
+        if not robot.wait_for_grip(False):
+            raise RuntimeError(&#x27;Vacuum did not release after a failed pickup.&#x27;)
+        move(&#x27;source_lift&#x27;)
+        robot.emit(&#x27;missing_block&#x27;, {&#x27;source_xy&#x27;: list(start_xy)})
+        return False
+    robot.carrying = True
+    move(&#x27;source_lift&#x27;)
+    if not robot.grip_confirmed():
+        raise RuntimeError(&#x27;Suction lost after lift; stop and inspect the dropped block.&#x27;)
+    move(&#x27;target_above&#x27;)
+    if not robot.grip_confirmed():
+        raise RuntimeError(&#x27;Suction lost during transport; stop and inspect the work area.&#x27;)
+    move(&#x27;target_place&#x27;)
+    robot.suction(False)
+    if not robot.wait_for_grip(False):
+        raise RuntimeError(&#x27;Block did not release at the stack.&#x27;)
+    robot.carrying = False
+    move(&#x27;target_lift&#x27;)
+    return True
+
+
+def execute_tasks(robot, detections, settings):
+    &quot;&quot;&quot;Use a frozen list; stack levels increase only after successful placement.&quot;&quot;&quot;
+    frozen = plan_tasks(list(detections), settings)
+    completed, missing = {&#x27;green&#x27;: 0, &#x27;yellow&#x27;: 0}, []
+    for block in frozen:
+        target = stack_target(block.color, completed[block.color], settings)
+        robot.emit(&#x27;pick_plan&#x27;, dict(block=block.as_dict(), target_xyz=target))
+        if move_block_vision(robot, block.world_xy, target, settings, block.color):
+            completed[block.color] += 1
+            robot.emit(&#x27;placed&#x27;, {&#x27;color&#x27;: block.color, &#x27;target_xyz&#x27;: target})
+        else:
+            missing.append(block.as_dict())
+    result = dict(placed=completed, missing=missing)
+    robot.emit(&#x27;summary&#x27;, result)
+    return result
+</pre></section><section><h2>ece470lab/lab_files/src/ece470labs/ece470labs/lab5_exec.py</h2><pre>#!/usr/bin/env python3
+&quot;&quot;&quot;Lab 5 starter workflow: frozen camera snapshot, Lab 4 IK, color stacks.
+
+Default mode only observes images. Motion requires --execute or --park-only.
+Color thresholds use the measured profile in config.json.
+&quot;&quot;&quot;
+
+import argparse
+import copy
+import csv
+from datetime import datetime, timezone
+import json
+import math
+import os
+from pathlib import Path
+import sys
+import time
+
+import cv2
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.utilities import remove_ros_args
+from rclpy.signals import SignalHandlerOptions
+from cv_bridge import CvBridge, CvBridgeError
+from sensor_msgs.msg import Image, JointState
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from ur_msgs.msg import IOStates
+from ur_msgs.srv import SetIO
+
+from .blob_search import CameraCalibration, Detection, analyze_native_image as analyze_image
+from .lab5_func import (encoder_angles, execute_tasks, load_settings,
+                       move_block_vision as pick_and_place, plan_tasks,
+                       stack_target, validate_motion_settings, vertical_targets, waypoints)
+
+
+class RunLog:
+    &quot;&quot;&quot;Save settings, events, and images in one timestamped directory.&quot;&quot;&quot;
+
+    def __init__(self, base, settings, mode):
+        self.directory = Path(base)/datetime.now(timezone.utc).strftime(&#x27;%Y%m%dT%H%M%S.%fZ&#x27;)
+        self.directory.mkdir(parents=True)
+        self.record = dict(mode=mode, settings=settings, events=[])
+        self.emit(&#x27;started&#x27;, {})
+
+    def emit(self, event, values):
+        &quot;&quot;&quot;Print and persist one event, including failed attempts.&quot;&quot;&quot;
+        entry = dict(time_utc=datetime.now(timezone.utc).isoformat(), event=event, **values)
+        self.record[&#x27;events&#x27;].append(entry)
+        print(event+&#x27;: &#x27;+json.dumps(values, allow_nan=False), flush=True)
+        (self.directory/&#x27;run.json&#x27;).write_text(json.dumps(self.record, indent=2, allow_nan=False)+&#x27;\n&#x27;)
+
+    def save_frame(self, frame):
+        &quot;&quot;&quot;Save the full image, centroid overlay, and masks.&quot;&quot;&quot;
+        image, overlay, masks, _ = frame
+        for name, pixels in dict(camera=image, centroids=overlay, **masks).items():
+            cv2.imwrite(str(self.directory/(name+&#x27;.png&#x27;)), pixels)
+
+
+class UR3e(Node):
+    &quot;&quot;&quot;Keep the starter callbacks and motion methods; gate command interfaces.&quot;&quot;&quot;
+
+    def __init__(self, settings, log, motion_enabled=False, show=False,
+                 calibration=None, image_topic=&#x27;/image_raw&#x27;, points_file=None):
+        super().__init__(&#x27;ur3e_lab5&#x27;)
+        self.settings, self.log = settings, log
+        self.calibration, self.show, self.points_file = calibration, show, points_file
+        self.joint_names = [&#x27;shoulder_pan_joint&#x27;, &#x27;shoulder_lift_joint&#x27;, &#x27;elbow_joint&#x27;,
+                            &#x27;wrist_1_joint&#x27;, &#x27;wrist_2_joint&#x27;, &#x27;wrist_3_joint&#x27;]
+        self.current_positions, self.joint_time = None, 0.0
+        self.analog_value, self.io_time, self.command_time = None, 0.0, 0.0
+        self.valve_output, self.valve_time = None, 0.0
+        self.carrying, self.last_xyz, self.suction_enabled = False, None, False
+        self.latest, self.image_time, self.image_error = None, 0.0, None
+        self.green_blocks, self.yellow_blocks = [], []
+        self.frozen_view, self.stopped = False, False
+        self.bridge = CvBridge()
+        self.trajectory_pub = self.create_publisher(
+            JointTrajectory, &#x27;/scaled_joint_trajectory_controller/joint_trajectory&#x27;, 10
+        ) if motion_enabled else None
+        self.io_client = self.create_client(SetIO, &#x27;/io_and_status_controller/set_io&#x27;) if motion_enabled else None
+        self.joint_state_sub = self.create_subscription(JointState, &#x27;/joint_states&#x27;, self.joint_state_callback, 10)
+        self.io_state_sub = self.create_subscription(IOStates, &#x27;/io_and_status_controller/io_states&#x27;, self.io_state_callback, 10)
+        self.image_sub = self.create_subscription(Image, image_topic, self.image_callback, qos_profile_sensor_data)
+        self.callback_executor = SingleThreadedExecutor(context=self.context)
+        self.callback_executor.add_node(self)
+
+    def destroy_node(self):
+        &quot;&quot;&quot;Release the persistent executor before destroying ROS entities.&quot;&quot;&quot;
+        self.callback_executor.remove_node(self)
+        self.callback_executor.shutdown()
+        return super().destroy_node()
+
+    def emit(self, event, values):
+        &quot;&quot;&quot;Share the planner&#x27;s event interface.&quot;&quot;&quot;
+        self.log.emit(event, values)
+
+    def joint_state_callback(self, msg):
+        &quot;&quot;&quot;Accept complete finite feedback in the required joint order.&quot;&quot;&quot;
+        try:
+            positions = [float(msg.position[msg.name.index(name)]) for name in self.joint_names]
+        except (ValueError, IndexError):
+            return
+        if np.all(np.isfinite(positions)):
+            self.current_positions, self.joint_time = positions, time.monotonic()
+
+    def io_state_callback(self, msg):
+        &quot;&quot;&quot;Read the configured analog pin, regardless of message order.&quot;&quot;&quot;
+        for state in msg.analog_in_states:
+            if state.pin == self.settings[&#x27;gripper&#x27;][&#x27;analog_pin&#x27;] and math.isfinite(state.state):
+                self.analog_value, self.io_time = float(state.state), time.monotonic()
+        for state in getattr(msg, &#x27;digital_out_states&#x27;, []):
+            if state.pin == self.settings[&#x27;gripper&#x27;][&#x27;output_pin&#x27;]:
+                self.valve_output, self.valve_time = bool(state.state), time.monotonic()
+
+    def image_callback(self, msg):
+        &quot;&quot;&quot;Detect both colors from one frame; freeze execution separately.&quot;&quot;&quot;
+        if self.frozen_view:
+            return
+        try:
+            raw = self.bridge.imgmsg_to_cv2(msg, desired_encoding=&#x27;bgr8&#x27;)
+            frame = analyze_image(raw, self.settings, self.calibration)
+            self.latest, self.image_time, self.image_error = frame, time.monotonic(), None
+            self.green_blocks = [d.world_xy for d in frame[3] if d.color == &#x27;green&#x27;]
+            self.yellow_blocks = [d.world_xy for d in frame[3] if d.color == &#x27;yellow&#x27;]
+            if self.show:
+                cv2.imshow(&#x27;Lab5 centroids&#x27;, frame[1])
+                cv2.setMouseCallback(&#x27;Lab5 centroids&#x27;, self.record_pixel)
+                for color, mask in frame[2].items():
+                    cv2.imshow(&#x27;Lab5 mask &#x27;+color, mask)
+        except (ValueError, CvBridgeError) as error:
+            self.image_error = str(error)
+            self.get_logger().error(self.image_error)
+        finally:
+            self.handle_key()
+
+    def handle_key(self):
+        &quot;&quot;&quot;Pump the GUI; q exits, f freezes, s saves the current frame.&quot;&quot;&quot;
+        if not getattr(self, &#x27;show&#x27;, False):
+            return
+        key = cv2.waitKey(1) &amp; 0xff
+        if key in [ord(&#x27;q&#x27;), 27]:
+            self.stopped = True
+        elif key == ord(&#x27;f&#x27;):
+            self.frozen_view = not self.frozen_view
+        elif key == ord(&#x27;s&#x27;) and self.latest is not None:
+            self.log.save_frame(self.latest)
+
+    def record_pixel(self, event, col, row, flags, userdata):
+        &quot;&quot;&quot;Print a pixel; optionally append blank world fields to CSV.&quot;&quot;&quot;
+        if event != cv2.EVENT_LBUTTONDOWN or self.latest is None:
+            return
+        xy = self.calibration.image_to_world(col, row) if self.calibration else None
+        self.emit(&#x27;clicked_pixel&#x27;, dict(col=col, row=row, world_xy=xy))
+        if self.points_file:
+            path = Path(self.points_file)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            header = not path.exists() or path.stat().st_size == 0
+            with path.open(&#x27;a&#x27;, newline=&#x27;&#x27;) as stream:
+                writer = csv.writer(stream)
+                if header:
+                    writer.writerow([&#x27;col&#x27;, &#x27;row&#x27;, &#x27;x_world_m&#x27;, &#x27;y_world_m&#x27;])
+                writer.writerow([col, row, &#x27;&#x27;, &#x27;&#x27;])
+
+    def spin_for(self, seconds):
+        &quot;&quot;&quot;Service callbacks for a bounded interval.&quot;&quot;&quot;
+        end = time.monotonic()+seconds
+        while rclpy.ok() and not self.stopped and time.monotonic() &lt; end:
+            # A fixed timeout preserves the ready-callback iterator and avoids starvation.
+            self.callback_executor.spin_once(timeout_sec=.01)
+            if self.frozen_view:
+                self.handle_key()
+        if not rclpy.ok() or self.stopped:
+            raise KeyboardInterrupt
+
+    def wait_until_ready(self, require_io=True, timeout=15.0):
+        &quot;&quot;&quot;Require a controller and fresh state before sending trajectories.&quot;&quot;&quot;
+        end = time.monotonic()+timeout
+        while time.monotonic() &lt; end:
+            joints = self.current_positions is not None and time.monotonic()-self.joint_time &lt; self.settings[&#x27;motion&#x27;][&#x27;feedback_max_age_seconds&#x27;]
+            controller = self.trajectory_pub is not None and self.trajectory_pub.get_subscription_count() &gt; 0
+            io = (self.io_client is not None and self.io_client.service_is_ready() and
+                  self.analog_value is not None and time.monotonic()-self.io_time &lt; self.settings[&#x27;gripper&#x27;][&#x27;max_age_seconds&#x27;])
+            if joints and controller and (io or not require_io):
+                return
+            self.spin_for(.1)
+        raise RuntimeError(&#x27;Robot/controller/IO unavailable or stale. Check driver and ROS domain.&#x27;)
+
+    def move_arm(self, target):
+        &quot;&quot;&quot;Send a bounded quintic trajectory; verify fresh measured arrival.&quot;&quot;&quot;
+        if self.trajectory_pub is None:
+            raise RuntimeError(&#x27;Arm commands are disabled in this mode.&#x27;)
+        if (len(target) != 6 or not np.all(np.isfinite(target)) or
+                max(abs(float(v)) for v in target) &gt; 2*math.pi):
+            raise ValueError(&#x27;Invalid encoder target; expected six radians within +/-2pi.&#x27;)
+        limit = self.settings[&#x27;motion&#x27;]
+        if self.current_positions is None or time.monotonic()-self.joint_time &gt; limit[&#x27;feedback_max_age_seconds&#x27;]:
+            raise RuntimeError(&#x27;Joint feedback is stale.&#x27;)
+        if self.trajectory_pub.get_subscription_count() == 0:
+            raise RuntimeError(&#x27;Trajectory controller is unavailable.&#x27;)
+        delta = max(abs(a-b) for a, b in zip(self.current_positions, target))
+        duration = max(1.0, 1.875*delta/limit[&#x27;velocity_limit&#x27;],
+                       math.sqrt(10/math.sqrt(3)*delta/limit[&#x27;acceleration_limit&#x27;]))
+        msg = JointTrajectory()
+        msg.joint_names = self.joint_names
+        for positions, seconds in [(self.current_positions, 0), (target, duration)]:
+            point = JointTrajectoryPoint()
+            point.positions = list(map(float, positions))
+            point.velocities, point.accelerations = [0.0]*6, [0.0]*6
+            ns = round(seconds*1e9)
+            point.time_from_start.sec, point.time_from_start.nanosec = divmod(ns, 1_000_000_000)
+            msg.points.append(point)
+        sent = time.monotonic()
+        self.trajectory_pub.publish(msg)
+        self.emit(&#x27;joint_command&#x27;, dict(encoder_rad=list(map(float, target)), duration_s=duration))
+        deadline = sent+max(30, 5*duration+5)
+        while time.monotonic() &lt; deadline:
+            self.spin_for(.05)
+            if time.monotonic()-self.joint_time &gt; limit[&#x27;feedback_max_age_seconds&#x27;]:
+                raise RuntimeError(&#x27;Joint feedback became stale during motion.&#x27;)
+            if self.carrying and not self.grip_confirmed():
+                raise RuntimeError(&#x27;Suction lost during motion; inspect the work area.&#x27;)
+            if self.joint_time &gt; sent and all(abs(a-b) &lt; limit[&#x27;joint_tolerance_rad&#x27;] for a, b in zip(self.current_positions, target)):
+                return True
+        raise RuntimeError(&#x27;Motion timed out before measured arrival.&#x27;)
+
+    def move_xyz(self, xyz):
+        &quot;&quot;&quot;Use Lab 4 IK; split vertical travel into short Cartesian segments.&quot;&quot;&quot;
+        for sample in vertical_targets(self.last_xyz, xyz):
+            if not self.move_arm(encoder_angles(sample, self.settings[&#x27;task&#x27;][&#x27;yaw_deg&#x27;])):
+                return False
+        self.last_xyz = list(xyz)
+        return True
+
+    def set_io(self, pin, state):
+        &quot;&quot;&quot;Set a digital output and require an acknowledged service result.&quot;&quot;&quot;
+        if self.io_client is None:
+            raise RuntimeError(&#x27;Suction commands are disabled in this mode.&#x27;)
+        req = SetIO.Request()
+        req.fun, req.pin, req.state = 1, int(pin), float(state)
+        future = self.io_client.call_async(req)
+        end = time.monotonic()+3
+        while not future.done() and time.monotonic() &lt; end:
+            self.spin_for(.02)
+        if not future.done():
+            future.cancel()
+            raise RuntimeError(&#x27;SetIO service timed out.&#x27;)
+        result = future.result()
+        if result is None or not result.success:
+            raise RuntimeError(&#x27;SetIO service rejected the command.&#x27;)
+        self.command_time = time.monotonic()
+        self.emit(&#x27;suction_command&#x27;, dict(pin=int(pin), enabled=bool(state)))
+        return result
+
+    def suction(self, enabled):
+        &quot;&quot;&quot;Switch suction through the configured digital output.&quot;&quot;&quot;
+        if self.io_client is None:
+            raise RuntimeError(&#x27;Suction commands are disabled in this mode.&#x27;)
+        self.suction_enabled = bool(enabled)
+        self.set_io(self.settings[&#x27;gripper&#x27;][&#x27;output_pin&#x27;], enabled)
+
+    def grip_confirmed(self):
+        &quot;&quot;&quot;Classify fresh analog feedback using threshold and polarity.&quot;&quot;&quot;
+        grip = self.settings[&#x27;gripper&#x27;]
+        if self.analog_value is None or time.monotonic()-self.io_time &gt; grip[&#x27;max_age_seconds&#x27;]:
+            raise RuntimeError(&#x27;Suction feedback is stale or missing.&#x27;)
+        above = self.analog_value &gt;= grip[&#x27;threshold&#x27;]
+        return above if grip[&#x27;holding_above_threshold&#x27;] else not above
+
+    def wait_for_grip(self, expected):
+        &quot;&quot;&quot;Debounce feedback newer than the last output command.&quot;&quot;&quot;
+        grip = self.settings[&#x27;gripper&#x27;]
+        end, stable_since, fresh = time.monotonic()+grip[&#x27;timeout_seconds&#x27;], None, False
+        while time.monotonic() &lt; end:
+            self.spin_for(.02)
+            if self.io_time &lt;= self.command_time:
+                continue
+            fresh = True
+            matches = self.grip_confirmed() == expected
+            stable_since = (stable_since or self.io_time) if matches else None
+            if stable_since is not None and self.io_time-stable_since &gt;= grip[&#x27;debounce_seconds&#x27;]:
+                self.emit(&#x27;suction_feedback&#x27;, dict(holding=expected, analog=self.analog_value))
+                return True
+        if not fresh:
+            raise RuntimeError(&#x27;No new suction feedback after the command.&#x27;)
+        return False
+
+    def move_block_vision(self, start_xy, target_xyz, color=None):
+        &quot;&quot;&quot;Complete the starter helper using IK and suction feedback.&quot;&quot;&quot;
+        return pick_and_place(self, start_xy, target_xyz, self.settings, color)
+
+    def shutdown_suction(self):
+        &quot;&quot;&quot;Close the valve on exit and verify output and released-vacuum feedback.&quot;&quot;&quot;
+        if self.io_client is None:
+            return
+        self.stopped, self.frozen_view, self.show = False, True, False
+        self.suction(False)
+        if not self.wait_for_grip(False):
+            raise RuntimeError(&#x27;Valve OFF requested, but vacuum release was not confirmed.&#x27;)
+        deadline = time.monotonic()+2.0
+        while self.valve_time &lt;= self.command_time and time.monotonic() &lt; deadline:
+            self.spin_for(.02)
+        if self.valve_time &lt;= self.command_time or self.valve_output is not False:
+            raise RuntimeError(&#x27;Valve OFF was not confirmed by fresh digital output feedback.&#x27;)
+        self.carrying = False
+        self.emit(&#x27;valve_closed&#x27;, dict(output_pin=self.settings[&#x27;gripper&#x27;][&#x27;output_pin&#x27;], confirmed=True))
+
+
+def log_plan(detections, settings, log, first_only=False):
+    &quot;&quot;&quot;Validate the full scene, then optionally plan just one test pickup.&quot;&quot;&quot;
+    selected = plan_tasks(detections, settings)
+    run_settings = copy.deepcopy(settings)
+    if first_only:
+        scene_count = len(selected)
+        selected = selected[:1]
+        run_settings[&#x27;task&#x27;][&#x27;expected_blocks&#x27;] = 1
+        log.emit(&#x27;single_block_test&#x27;, dict(scene_block_count=scene_count,
+                                          selected_block=selected[0].as_dict()))
+    levels, blocks = dict(green=0, yellow=0), []
+    for block in selected:
+        target = stack_target(block.color, levels[block.color], settings)
+        levels[block.color] += 1
+        poses = [dict(name=name, xyz_m=xyz, encoder_rad=encoder_angles(xyz, settings[&#x27;task&#x27;][&#x27;yaw_deg&#x27;]))
+                 for name, xyz in waypoints(block.world_xy, target, settings, block.color)]
+        blocks.append(dict(detection=block.as_dict(), poses=poses))
+    log.emit(&#x27;dry_run_plan&#x27;, dict(blocks=blocks))
+    return selected, run_settings
+
+
+def main(args=None):
+    &quot;&quot;&quot;Select a mode; offline checks never initialize ROS.&quot;&quot;&quot;
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    for mode in [&#x27;vision-only&#x27;, &#x27;dry-run&#x27;, &#x27;execute&#x27;, &#x27;park-only&#x27;, &#x27;io-only&#x27;]:
+        modes.add_argument(&#x27;--&#x27;+mode, action=&#x27;store_true&#x27;)
+    parser.add_argument(&#x27;--config&#x27;, default=os.environ.get(&#x27;LAB5_CONFIG&#x27;))
+    parser.add_argument(&#x27;--image&#x27;, help=&#x27;Saved image; uses the same starter detector as live mode.&#x27;)
+    parser.add_argument(&#x27;--detections&#x27;, help=&#x27;Offline JSON world detections; dry-run only, no color processing.&#x27;)
+    parser.add_argument(&#x27;--no-gui&#x27;, action=&#x27;store_true&#x27;)
+    parser.add_argument(&#x27;--duration&#x27;, type=float, default=0, help=&#x27;Preview seconds; zero runs until exit.&#x27;)
+    parser.add_argument(&#x27;--expected-blocks&#x27;, type=int,
+                        help=&#x27;Expected visible scene count, not the number to pick.&#x27;)
+    parser.add_argument(&#x27;--first-only&#x27;, action=&#x27;store_true&#x27;,
+                        help=&#x27;Validate the full scene, then pick only the first block.&#x27;)
+    parser.add_argument(&#x27;--pause-after-snapshot&#x27;, action=&#x27;store_true&#x27;)
+    parser.add_argument(&#x27;--calibration-points&#x27;, help=&#x27;CSV for clicked pixels; fill world meters manually.&#x27;)
+    parser.add_argument(&#x27;--image-topic&#x27;, default=&#x27;/image_raw&#x27;)
+    parser.add_argument(&#x27;--log-dir&#x27;, default=os.environ.get(&#x27;LAB5_LOG_DIR&#x27;, &#x27;lab5_runs&#x27;))
+    argv = sys.argv if args is None else [&#x27;lab5_exec&#x27;, *args]
+    options = parser.parse_args(remove_ros_args(args=argv)[1:])
+    motion = options.execute or options.park_only
+    try:
+        settings = load_settings(options.config)
+        if options.expected_blocks is not None:
+            if options.expected_blocks &lt;= 0:
+                raise ValueError(&#x27;--expected-blocks must be positive.&#x27;)
+            settings[&#x27;task&#x27;][&#x27;expected_blocks&#x27;] = options.expected_blocks
+        if not math.isfinite(options.duration) or options.duration &lt; 0:
+            raise ValueError(&#x27;--duration must be nonnegative.&#x27;)
+        if options.pause_after_snapshot and not options.execute:
+            raise ValueError(&#x27;--pause-after-snapshot requires --execute.&#x27;)
+        if options.first_only and not (options.execute or options.dry_run):
+            raise ValueError(&#x27;--first-only requires --execute or --dry-run.&#x27;)
+        if options.calibration_points and (motion or options.dry_run or options.io_only):
+            raise ValueError(&#x27;--calibration-points is for vision-only mode.&#x27;)
+        if options.image and (motion or options.detections or options.io_only):
+            raise ValueError(&#x27;--image cannot be used with hardware commands or detections.&#x27;)
+        if options.detections and not options.dry_run:
+            raise ValueError(&#x27;--detections requires --dry-run.&#x27;)
+        if motion and (not options.config or settings[&#x27;simulation_only&#x27;]):
+            raise ValueError(&#x27;Hardware commands require a measured, non-simulation configuration.&#x27;)
+        camera = settings[&#x27;camera&#x27;]
+        calibration = CameraCalibration.from_dict(camera) if any(camera[k] is not None for k in [&#x27;beta&#x27;, &#x27;theta&#x27;, &#x27;tx&#x27;, &#x27;ty&#x27;]) else None
+        if options.execute or options.dry_run:
+            calibration = validate_motion_settings(settings)
+        if options.park_only:
+            away = settings[&#x27;task&#x27;][&#x27;go_away_encoder_deg&#x27;]
+            if len(away) != 6 or not np.all(np.isfinite(away)) or max(map(abs, away)) &gt; 360:
+                raise ValueError(&#x27;Invalid go_away_encoder_deg.&#x27;)
+            for key in [&#x27;velocity_limit&#x27;, &#x27;acceleration_limit&#x27;, &#x27;joint_tolerance_rad&#x27;, &#x27;feedback_max_age_seconds&#x27;]:
+                value = settings[&#x27;motion&#x27;][key]
+                if value is None or not math.isfinite(value) or value &lt;= 0:
+                    raise ValueError(&#x27;Invalid motion.&#x27;+key)
+    except (ValueError, TypeError, KeyError, OSError) as error:
+        parser.error(str(error))
+
+    mode = next((name for name in [&#x27;execute&#x27;, &#x27;park_only&#x27;, &#x27;dry_run&#x27;, &#x27;io_only&#x27;] if getattr(options, name)), &#x27;vision_only&#x27;)
+    log = RunLog(options.log_dir, settings, mode)
+    if options.image or options.detections:
+        try:
+            if options.image:
+                frame = analyze_image(cv2.imread(options.image), settings, calibration)
+                log.save_frame(frame)
+                detections = frame[3]
+            else:
+                detections = [Detection(**d) for d in json.loads(Path(options.detections).read_text())]
+            log.emit(&#x27;snapshot&#x27;, dict(blocks=[d.as_dict() for d in detections]))
+            if options.dry_run:
+                log_plan(detections, settings, log, options.first_only)
+            log.emit(&#x27;finished&#x27;, dict(arm_commands_sent=0, suction_commands_sent=0))
+        except (ValueError, TypeError, KeyError, OSError) as error:
+            log.emit(&#x27;error&#x27;, dict(message=str(error)))
+            raise SystemExit(1)
+        return
+
+    if motion:
+        try:
+            input(&#x27;Check Remote/Normal state, the driver, and clear the arm path.\n&#x27;
+                  &#x27;This mode WILL MOVE the arm. Enter continues, Ctrl-C cancels: &#x27;)
+        except (KeyboardInterrupt, EOFError):
+            log.emit(&#x27;cancelled&#x27;, {})
+            return
+    # Keep ROS alive during Ctrl-C cleanup so the valve can still be closed.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    node, exit_code = None, 0
+    try:
+        show = not options.no_gui and bool(os.environ.get(&#x27;DISPLAY&#x27;) or os.environ.get(&#x27;WAYLAND_DISPLAY&#x27;))
+        node = UR3e(settings, log, motion, show, calibration, options.image_topic, options.calibration_points)
+        if motion:
+            node.wait_until_ready(require_io=options.execute)
+            node.move_arm(np.radians(settings[&#x27;task&#x27;][&#x27;go_away_encoder_deg&#x27;]).tolist())
+        if options.park_only:
+            log.emit(&#x27;parked&#x27;, {})
+            return
+        if options.execute or options.dry_run:
+            node.spin_for(settings[&#x27;task&#x27;][&#x27;settle_seconds&#x27;])
+            deadline = time.monotonic()+8
+            while node.latest is None and time.monotonic() &lt; deadline:
+                node.spin_for(.1)
+            if (node.latest is None or node.image_error is not None or
+                    time.monotonic()-node.image_time &gt; settings[&#x27;task&#x27;][&#x27;frame_max_age_seconds&#x27;]):
+                raise RuntimeError(&#x27;No fresh valid camera image: &#x27;+str(node.image_error))
+            frozen = list(node.latest[3])
+            node.frozen_view = True
+            log.save_frame(node.latest)
+            log.emit(&#x27;snapshot&#x27;, dict(blocks=[d.as_dict() for d in frozen]))
+            frozen, run_settings = log_plan(frozen, settings, log, options.first_only)
+            if options.execute:
+                if options.pause_after_snapshot:
+                    input(&#x27;Snapshot fixed and arm parked. Remove a block only while stationary.\n&#x27;
+                          &#x27;Clear the work area, then press Enter to start pickup: &#x27;)
+                result = execute_tasks(node, frozen, run_settings)
+                node.move_arm(np.radians(settings[&#x27;task&#x27;][&#x27;go_away_encoder_deg&#x27;]).tolist())
+                exit_code = 1 if result[&#x27;missing&#x27;] else 0
+        else:
+            start, report_time = time.monotonic(), 0.0
+            print(&#x27;Read-only: no trajectory publisher or suction client.&#x27;)
+            while not node.stopped and (options.duration == 0 or time.monotonic()-start &lt; options.duration):
+                node.spin_for(.1)
+                if options.io_only and time.monotonic()-report_time &gt;= 1:
+                    fresh = node.analog_value is not None and time.monotonic()-node.io_time &lt; settings[&#x27;gripper&#x27;][&#x27;max_age_seconds&#x27;]
+                    log.emit(&#x27;io_sample&#x27;, dict(analog=node.analog_value, fresh=fresh))
+                    report_time = time.monotonic()
+                if not options.io_only and node.latest is None and time.monotonic()-start &gt; 8:
+                    raise RuntimeError(&#x27;No valid image received: &#x27;+str(node.image_error))
+            if node.latest is not None:
+                log.save_frame(node.latest)
+        log.emit(&#x27;finished&#x27;, dict(exit_code=exit_code))
+    except (KeyboardInterrupt, EOFError):
+        log.emit(&#x27;cancelled&#x27;, {})
+    except (RuntimeError, ValueError) as error:
+        log.emit(&#x27;error&#x27;, dict(message=str(error)))
+        exit_code = 1
+    finally:
+        if node is not None:
+            if node.io_client is not None and (options.execute or node.suction_enabled):
+                try:
+                    node.shutdown_suction()
+                except (RuntimeError, KeyboardInterrupt) as error:
+                    log.emit(&#x27;valve_shutdown_failed&#x27;, dict(message=str(error)))
+                    exit_code = 1
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+        cv2.destroyAllWindows()
+    if exit_code:
+        raise SystemExit(exit_code)
+
+
+if __name__ == &#x27;__main__&#x27;:
+    main()
+</pre></section><section><h2>ece470lab/lab_files/src/ece470labs/ece470labs/lab5_calibrate.py</h2><pre>&quot;&quot;&quot;Fit and save Appendix B calibration from measured pixel/world pairs.&quot;&quot;&quot;
+
+import argparse
+import csv
+from dataclasses import asdict
+from pathlib import Path
+
+from .blob_search import fit_calibration
+from .lab5_func import load_settings, save_settings
+
+
+def main(args=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(&#x27;--points&#x27;, required=True, help=&#x27;CSV: col,row,x_world_m,y_world_m.&#x27;)
+    parser.add_argument(&#x27;--config&#x27;, required=True, help=&#x27;Lab 5 JSON configuration to update.&#x27;)
+    parser.add_argument(&#x27;--image-size&#x27;, type=int, nargs=2, metavar=(&#x27;WIDTH&#x27;, &#x27;HEIGHT&#x27;))
+    parser.add_argument(&#x27;--max-error-mm&#x27;, type=float, default=5.0)
+    parser.add_argument(&#x27;--check-only&#x27;, action=&#x27;store_true&#x27;, help=&#x27;Check pairs without changing the configuration.&#x27;)
+    options = parser.parse_args(args)
+    try:
+        settings = load_settings(options.config)
+        with Path(options.points).open(newline=&#x27;&#x27;) as stream:
+            pairs = list(csv.DictReader(stream))
+        pixels = [[float(row[&#x27;col&#x27;]), float(row[&#x27;row&#x27;])] for row in pairs]
+        world = [[float(row[&#x27;x_world_m&#x27;]), float(row[&#x27;y_world_m&#x27;])] for row in pairs]
+        width, height = options.image_size or [settings[&#x27;camera&#x27;][&#x27;width&#x27;], settings[&#x27;camera&#x27;][&#x27;height&#x27;]]
+        calibration, errors = fit_calibration(
+            pixels, world, width, height, settings[&#x27;vision&#x27;][&#x27;flip_horizontal&#x27;], options.max_error_mm/1000)
+        print(&#x27;Measured camera calibration:&#x27;, asdict(calibration))
+        print(&#x27;Point residuals (mm):&#x27;, (errors*1000).round(3).tolist())
+        if not options.check_only:
+            settings[&#x27;camera&#x27;] = asdict(calibration)
+            save_settings(options.config, settings)
+            report_path = Path(options.points).with_suffix(&#x27;.validation.csv&#x27;)
+            with report_path.open(&#x27;w&#x27;, newline=&#x27;&#x27;) as stream:
+                writer = csv.writer(stream)
+                writer.writerow([&#x27;col&#x27;, &#x27;row&#x27;, &#x27;x_world_m&#x27;, &#x27;y_world_m&#x27;, &#x27;predicted_x_m&#x27;,
+                                 &#x27;predicted_y_m&#x27;, &#x27;residual_m&#x27;])
+                for pixel, measured, error in zip(pixels, world, errors):
+                    writer.writerow([*pixel, *measured, *calibration.image_to_world(*pixel), error])
+            print(&#x27;Saved:&#x27;, options.config, &#x27;and&#x27;, report_path)
+    except (ValueError, KeyError, OSError, TypeError) as error:
+        parser.error(str(error)+&#x27; Fill at least three non-collinear pixel/world pairs in meters.&#x27;)
+
+
+if __name__ == &#x27;__main__&#x27;:
+    main()
+</pre></section><section><h2>ece470lab/lab_files/src/ece470labs/ece470labs/lab_func.py</h2><pre>#!/usr/bin/env python
+import numpy as np
+from numpy import cross, append, array
+from scipy.linalg import expm
+from math import pi
+import math
+
+&quot;&quot;&quot;
+Use &#x27;expm&#x27; for matrix exponential.
+Angles are in radian, distance are in meters.
+&quot;&quot;&quot;
+BASE_X = -150
+BASE_Y = 150
+BASE_Z = 10
+L1 = 152
+L2 = 120
+L3 = 244
+L4 = -93
+L5 = 213
+L6 = 104
+L7 = 85
+L8 = 92
+L9 = 53.5  # Horizontal suction-cup offset from joint 6 (mm).
+L10 = 59  # Vertical tool extension below link 8 (mm).
+def Get_MS()-&gt;tuple:
+	# =================== Your code starts here ====================#
+	# Fill in the correct values for S1~6, as well as the M matrix
+	M = np.eye(4)
+	S = np.zeros((6,6))
+	w0 = array([0,0,1])
+	q0 = array([BASE_X,BASE_Y,BASE_Z+L1])
+	S[0] = append(w0, cross(-w0,q0)) 
+	w1 = array([0,1,0])
+	q1 = q0 + array([0,L2,0])
+	S[1] = append(w1,cross(-w1,q1)) 
+	w2 = array([0,1,0])
+	q2 = q1 + array([L3,0,0])
+	S[2] = append(w2,cross(-w2,q2)) 
+	w3 = array([0,1,0])
+	q3 = q2 + array([L5,L4,0])
+	S[3] = append(w3,cross(-w3,q3)) 
+	w4 = array([1,0,0])
+	q4 = q3 + array([0,L6,0])
+	S[4] = append(w4,cross(-w4,q4)) 
+	w5 = array([0,1,0])
+	q5 = q4 + array([L7,0,0	])
+	S[5] = append(w5, cross(-w5,q5)) 
+	M[:3,-1] = (q5 + array([0,L8+L10,L9])).reshape(1,3)
+	M[:3,:3] = array([[0,-1,0],[0,0,-1],[1,0,0]])
+
+	# ==============================================================#
+	return M, S
+
+def w(w):
+	return np.array([[0,-w[2],w[1]], [w[2],0,-w[0]], [-w[1], w[0],0]])
+
+def S(s):
+	a = np.eye(4)
+	w_box = w(s[:3])
+	a[:3,:3] = w_box
+	a[:3,-1] = s[3:]
+	a[3][3] = 0
+	return a
+def forward_kinematics(theta1, theta2, theta3, theta4, theta5, theta6):
+    &quot;&quot;&quot;Return the world-frame tool transform; translation is in millimeters.
+
+    Inputs are geometric joint angles in radians, before encoder offsets.
+    The existing Lab 3 product-of-exponentials model is kept unchanged.
+    &quot;&quot;&quot;
+    angles = np.asarray([theta1, theta2, theta3, theta4, theta5, theta6],
+                        dtype=float)
+    if not np.all(np.isfinite(angles)):
+        raise ValueError(&quot;Joint angles must be finite.&quot;)
+    home, screws = Get_MS()
+    transform = np.eye(4)
+    for screw, angle in zip(screws, angles):
+        transform = transform @ expm(S(screw) * angle)
+    return transform @ home
+
+
+def lab_fk(theta1, theta2, theta3, theta4, theta5, theta6):
+    &quot;&quot;&quot;Print Lab 3 FK and return the six ROS encoder angles in radians.&quot;&quot;&quot;
+    transform = forward_kinematics(theta1, theta2, theta3, theta4, theta5, theta6)
+    print(&quot;Forward kinematics (world frame; matrix translation in mm):&quot;)
+    print(transform)
+    print(&quot;World gripper position (m):&quot;, transform[:3, 3] / 1000.0)
+    return [theta1 + pi, theta2, theta3, theta4 - pi / 2, theta5, theta6]
+
+
+def _unit_interval(value, description):
+    &quot;&quot;&quot;Reject unreachable geometry, allowing roundoff at workspace limits.&quot;&quot;&quot;
+    if value &lt; -1.0 - 1e-10 or value &gt; 1.0 + 1e-10:
+        raise ValueError(&quot;Unreachable pose: &quot; + description)
+    return float(np.clip(value, -1.0, 1.0))
+
+
+def lab_ik_angles(xWgrip, yWgrip, zWgrip, yaw_WgripDegree):
+    &quot;&quot;&quot;Solve the manual&#x27;s elbow-up branch, returning geometric radians.
+
+    World coordinates are in meters and yaw is in degrees about world +z.
+    Link dimensions and the world-to-base translation come from Lab 3.
+    See lab4/Lab4_Report.html for the illustrated derivation.
+    &quot;&quot;&quot;
+    pose = np.asarray([xWgrip, yWgrip, zWgrip, yaw_WgripDegree], dtype=float)
+    if not np.all(np.isfinite(pose)):
+        raise ValueError(&quot;Position and yaw must be finite numbers.&quot;)
+    yaw = math.radians(float(pose[3]) % 360.0)
+
+    # 1. World -&gt; base: aligned axes, base origin (-.150, .150, .010) m.
+    xgrip = float(pose[0]) - BASE_X / 1000.0
+    ygrip = float(pose[1]) - BASE_Y / 1000.0
+    zgrip = float(pose[2]) - BASE_Z / 1000.0
+
+    # 2. Joint-6 axis projected to the height of the suction cup.
+    xcen = xgrip - L9 / 1000.0 * math.cos(yaw)
+    ycen = ygrip - L9 / 1000.0 * math.sin(yaw)
+    zcen = zgrip
+
+    # 3. Top view: c = (r3 + L7) e_r + d e_t, d = L2 + L4 + L6.
+    offset = (L2 + L4 + L6) / 1000.0
+    radius = math.hypot(xcen, ycen)
+    if radius &lt; offset - 1e-12:
+        raise ValueError(&quot;Unreachable pose: wrist center is inside the &quot;
+                         f&quot;{offset:.3f} m waist-offset cylinder.&quot;)
+    theta1 = math.atan2(ycen, xcen) - math.asin(
+        _unit_interval(offset / radius, &quot;waist offset exceeds wrist radius&quot;))
+
+    # 4. At theta6=0 the plate points along +e_t.
+    theta6 = (theta1 + pi / 2 - yaw + pi) % (2 * pi) - pi
+
+    # 5. Remove the horizontal wrist links and lift to the elbow plane.
+    x3end = xcen - L7 / 1000.0 * math.cos(theta1) + offset * math.sin(theta1)
+    y3end = ycen - L7 / 1000.0 * math.sin(theta1) - offset * math.cos(theta1)
+    z3end = zcen + (L8 + L10) / 1000.0
+    radial = x3end * math.cos(theta1) + y3end * math.sin(theta1)
+    height = z3end - L1 / 1000.0
+    distance = math.hypot(radial, height)
+    upper_arm, forearm = L3 / 1000.0, L5 / 1000.0
+    if (distance &lt; abs(upper_arm - forearm) - 1e-12 or
+            distance &gt; upper_arm + forearm + 1e-12):
+        raise ValueError(&quot;Unreachable pose: shoulder-to-wrist distance &quot;
+                         f&quot;{distance:.6f} m is outside &quot;
+                         f&quot;[{abs(upper_arm - forearm):.3f}, &quot;
+                         f&quot;{upper_arm + forearm:.3f}] m.&quot;)
+
+    # 6. Law of cosines; the shoulder-above-target branch is elbow-up.
+    theta3 = math.acos(_unit_interval(
+        (distance**2 - upper_arm**2 - forearm**2) /
+        (2 * upper_arm * forearm), &quot;elbow triangle cannot close&quot;))
+    # Equivalent to the shoulder cosine rule, but stays consistent with
+    # theta3 at straight/folded boundaries despite floating-point roundoff.
+    alpha = math.atan2(forearm * math.sin(theta3),
+                       upper_arm + forearm * math.cos(theta3))
+    theta2 = -math.atan2(height, radial) - alpha
+    theta4 = -theta2 - theta3
+    theta5 = -pi / 2
+    return [theta1, theta2, theta3, theta4, theta5, theta6]
+
+
+def lab_invk(xWgrip, yWgrip, zWgrip, yaw_WgripDegree):
+    &quot;&quot;&quot;Solve IK, verify using Lab 3 FK, and return ROS encoder radians.&quot;&quot;&quot;
+    angles = lab_ik_angles(xWgrip, yWgrip, zWgrip, yaw_WgripDegree)
+    transform = forward_kinematics(*angles)
+    target = np.asarray([xWgrip, yWgrip, zWgrip], dtype=float)
+    residual = np.linalg.norm(transform[:3, 3] / 1000.0 - target)
+    yaw = math.radians(float(yaw_WgripDegree) % 360.0)
+    expected_rotation = np.array([[math.cos(yaw), -math.sin(yaw), 0.0],
+                                  [math.sin(yaw), math.cos(yaw), 0.0],
+                                  [0.0, 0.0, 1.0]])
+    if residual &gt; 1e-8 or not np.allclose(
+            transform[:3, :3], expected_rotation, atol=1e-8, rtol=0):
+        raise ValueError(&quot;IK failed the forward-kinematics consistency check.&quot;)
+    print(f&quot;IK/FK position residual: {residual:.3e} m&quot;)
+    # The Lab 3 function applies theta1+pi and theta4-pi/2 exactly once.
+    return lab_fk(*angles)
+
+
+&quot;&quot;&quot;
+Z1 = 6.7
+X1 = 17.8
+Y1 = 32.2
+
+Z2 = 28.6
+Y2 = -13.2
+X1 = 19.5
+
+&quot;&quot;&quot;
+</pre></section><section><h2>ece470lab/lab_files/src/ece470labs/package.xml</h2><pre>&lt;?xml version=&quot;1.0&quot;?&gt;
+&lt;?xml-model href=&quot;http://download.ros.org/schema/package_format3.xsd&quot; schematypens=&quot;http://www.w3.org/2001/XMLSchema&quot;?&gt;
+&lt;package format=&quot;3&quot;&gt;
+  &lt;name&gt;ece470labs&lt;/name&gt;
+  &lt;version&gt;0.0.0&lt;/version&gt;
+  &lt;description&gt;TODO: Package description&lt;/description&gt;
+  &lt;maintainer email=&quot;d-block@todo.todo&quot;&gt;d-block&lt;/maintainer&gt;
+  &lt;license&gt;TODO: License declaration&lt;/license&gt;
+
+  &lt;test_depend&gt;ament_copyright&lt;/test_depend&gt;
+  &lt;test_depend&gt;ament_flake8&lt;/test_depend&gt;
+  &lt;test_depend&gt;ament_pep257&lt;/test_depend&gt;
+  &lt;test_depend&gt;python3-pytest&lt;/test_depend&gt;
+  &lt;depend&gt;rclpy&lt;/depend&gt;
+  &lt;depend&gt;sensor_msgs&lt;/depend&gt;
+  &lt;depend&gt;trajectory_msgs&lt;/depend&gt;
+  &lt;depend&gt;python3-scipy&lt;/depend&gt;
+  &lt;depend&gt;cv_bridge&lt;/depend&gt;
+  &lt;depend&gt;python3-opencv&lt;/depend&gt;
+  &lt;depend&gt;ur_msgs&lt;/depend&gt;
+  &lt;depend&gt;python3-numpy&lt;/depend&gt;  # Often required with OpenCV
+  &lt;export&gt;
+    &lt;build_type&gt;ament_python&lt;/build_type&gt;
+  &lt;/export&gt;
+&lt;/package&gt;
+</pre></section><section><h2>ece470lab/lab_files/src/ece470labs/setup.py</h2><pre>from setuptools import find_packages, setup
+
+package_name = &#x27;ece470labs&#x27;
+
+setup(
+    name=package_name,
+    version=&#x27;0.0.0&#x27;,
+    packages=find_packages(exclude=[&#x27;test&#x27;]),
+    data_files=[
+        (&#x27;share/ament_index/resource_index/packages&#x27;,
+            [&#x27;resource/&#x27; + package_name]),
+        (&#x27;share/&#x27; + package_name, [&#x27;package.xml&#x27;]),
+    ],
+    install_requires=[&#x27;setuptools&#x27;, &#x27;numpy&#x27;, &#x27;scipy&#x27;],
+    zip_safe=True,
+    maintainer=&#x27;d-block&#x27;,
+    maintainer_email=&#x27;d-block@todo.todo&#x27;,
+    description=&#x27;TODO: Package description&#x27;,
+    license=&#x27;TODO: License declaration&#x27;,
+    extras_require={
+        &#x27;test&#x27;: [
+            &#x27;pytest&#x27;,
+        ],
+    },
+    entry_points={
+        &#x27;console_scripts&#x27;: [
+            &#x27;lab2_exec = ece470labs.lab2_exec:main&#x27;,            
+            &#x27;lab3_exec = ece470labs.lab3_exec:main&#x27;,            
+            &#x27;lab4_exec = ece470labs.lab4_exec:main&#x27;,
+            &#x27;lab5_exec = ece470labs.lab5_exec:main&#x27;,
+            &#x27;lab5_calibrate = ece470labs.lab5_calibrate:main&#x27;,
+            &#x27;lab5_color_view = ece470labs.lab5_color_view:main&#x27;,
+
+        ],
+    },
+)
+</pre></section><section><h2>lab5/config.json</h2><pre>{
+  &quot;simulation_only&quot;: false,
+  &quot;camera&quot;: {
+    &quot;beta&quot;: 641.7243965631948,
+    &quot;theta&quot;: -0.0654575072821331,
+    &quot;tx&quot;: -0.2316441062031388,
+    &quot;ty&quot;: -0.14319698039608697,
+    &quot;width&quot;: 640,
+    &quot;height&quot;: 480,
+    &quot;flip_horizontal&quot;: false
+  },
+  &quot;vision&quot;: {
+    &quot;hsv&quot;: {
+      &quot;green&quot;: [
+        [
+          45,
+          100,
+          80
+        ],
+        [
+          75,
+          255,
+          255
+        ]
+      ],
+      &quot;yellow&quot;: [
+        [
+          15,
+          140,
+          150
+        ],
+        [
+          32,
+          255,
+          255
+        ]
+      ],
+      &quot;orange&quot;: [
+        [
+          4,
+          130,
+          130
+        ],
+        [
+          18,
+          255,
+          255
+        ]
+      ]
+    },
+    &quot;roi&quot;: [
+      230,
+      140,
+      500,
+      340
+    ],
+    &quot;area_px&quot;: [
+      180,
+      1200
+    ],
+    &quot;morphology_kernel&quot;: 3,
+    &quot;flip_horizontal&quot;: false
+  },
+  &quot;task&quot;: {
+    &quot;block_height_m&quot;: 0.031,
+    &quot;table_z_m&quot;: 0.0,
+    &quot;contact_offset_m&quot;: -0.002,
+    &quot;pickup_offset_m&quot;: {
+      &quot;green&quot;: 0.0,
+      &quot;yellow&quot;: -0.003
+    },
+    &quot;safe_z_m&quot;: 0.15,
+    &quot;yaw_deg&quot;: 90.0,
+    &quot;stack_xy_m&quot;: {
+      &quot;green&quot;: [
+        0.2,
+        0.1
+      ],
+      &quot;yellow&quot;: [
+        0.3,
+        0.1
+      ]
+    },
+    &quot;workspace_xy_m&quot;: [
+      0.1,
+      0.5,
+      0.05,
+      0.5
+    ],
+    &quot;expected_blocks&quot;: 4,
+    &quot;max_per_color&quot;: 3,
+    &quot;settle_seconds&quot;: 5.0,
+    &quot;frame_max_age_seconds&quot;: 1.0,
+    &quot;go_away_encoder_deg&quot;: [
+      270,
+      -90,
+      90,
+      -90,
+      -90,
+      135
+    ],
+    &quot;stack_clearance_m&quot;: 0.05
+  },
+  &quot;gripper&quot;: {
+    &quot;output_pin&quot;: 0,
+    &quot;analog_pin&quot;: 0,
+    &quot;threshold&quot;: 2.0,
+    &quot;holding_above_threshold&quot;: true,
+    &quot;timeout_seconds&quot;: 1.5,
+    &quot;debounce_seconds&quot;: 0.15,
+    &quot;max_age_seconds&quot;: 0.5
+  },
+  &quot;motion&quot;: {
+    &quot;velocity_limit&quot;: 0.5,
+    &quot;acceleration_limit&quot;: 0.4,
+    &quot;joint_tolerance_rad&quot;: 0.003,
+    &quot;feedback_max_age_seconds&quot;: 1.0
+  }
+}
+</pre></section></html>

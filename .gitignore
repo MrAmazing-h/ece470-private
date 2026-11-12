@@ -1,0 +1,12 @@
+__pycache__/
+.pytest_cache/
+.lab4-build/
+.lab4-install/
+.lab4-log/
+.lab5-build/
+.lab5-install/
+.lab5-log/
+lab5_runs/
+ece470lab/lab_files/build/
+ece470lab/lab_files/install/
+ece470lab/lab_files/log/

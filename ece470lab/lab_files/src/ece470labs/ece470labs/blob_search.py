@@ -2,6 +2,112 @@
 
 import cv2
 import numpy as np
+from dataclasses import dataclass, asdict
+import math
+
+# Measured starting profile, 2026-11-12; main may override it from config.json.
+NATIVE_VISION_DEFAULTS = {
+    'hsv': {'green': [[45, 100, 80], [75, 255, 255]],
+            'yellow': [[15, 140, 150], [32, 255, 255]],
+            'orange': [[5, 150, 150], [18, 255, 255]]},
+    'roi': [100, 160, 570, 355],
+    'area_px': [180, 1200], 'morphology_kernel': 3,
+}
+
+@dataclass(frozen=True)
+class CameraCalibration:
+    """Appendix B: camera_xy = Rcw(theta) @ world_xy + [tx, ty].
+
+    Camera x increases with image row; camera y with column. beta is px/m,
+    theta is radians, and translations are meters in the camera frame.
+    Pixel coordinates always refer to the FULL, optionally flipped image.
+    """
+
+    beta: float
+    theta: float
+    tx: float
+    ty: float
+    width: int = 640
+    height: int = 480
+    flip_horizontal: bool = False
+
+    def __post_init__(self):
+        """Reject missing or invalid calibration values."""
+        values = [self.beta, self.theta, self.tx, self.ty]
+        if any(v is None or not math.isfinite(float(v)) for v in values):
+            raise ValueError('Camera is not calibrated: measure beta, theta, tx and ty.')
+        if self.beta <= 0:
+            raise ValueError('Camera beta must be positive, in pixels per meter.')
+        if any(not isinstance(v, int) or isinstance(v, bool) or v <= 0
+               for v in [self.width, self.height]):
+            raise ValueError('Camera image size must contain positive integer dimensions.')
+        if not isinstance(self.flip_horizontal, bool):
+            raise ValueError('Camera flip_horizontal must be boolean.')
+
+    @classmethod
+    def from_dict(cls, values):
+        """Load the measured camera section from JSON."""
+        return cls(**values)
+
+    def image_to_world(self, col, row):
+        """Map full-image (column,row) pixels to world meters."""
+        if not np.all(np.isfinite([col, row])):
+            raise ValueError('Pixel coordinates must be finite.')
+        camera = np.array([(row-self.height/2)/self.beta-self.tx,
+                           (col-self.width/2)/self.beta-self.ty])
+        c, s = math.cos(self.theta), math.sin(self.theta)
+        return tuple((np.array([[c, s], [-s, c]]) @ camera).tolist())
+
+
+@dataclass(frozen=True)
+class Detection:
+    color: str
+    col: float
+    row: float
+    world_xy: tuple | None = None
+
+    def as_dict(self):
+        """Serialize one detection for run records."""
+        return asdict(self)
+
+
+def fit_calibration(pixels, world, width=640, height=480,
+                    flip_horizontal=False, max_error_m=0.005):
+    """Fit the Appendix B rigid planar map plus scale from measured pairs.
+
+    At least three non-collinear pairs are required to expose reflected axes.
+    Residuals are training-point errors, not independent physical validation.
+    """
+    pixels, world = np.asarray(pixels, dtype=float), np.asarray(world, dtype=float)
+    if (pixels.ndim != 2 or pixels.shape[1:] != (2,) or len(pixels) < 3 or
+            world.shape != pixels.shape or not np.all(np.isfinite(pixels)) or
+            not np.all(np.isfinite(world))):
+        raise ValueError('Need at least three finite pixel/world point pairs.')
+    if not math.isfinite(max_error_m) or max_error_m <= 0:
+        raise ValueError('Maximum calibration error must be positive.')
+    if (np.any(pixels < 0) or np.any(pixels[:, 0] >= width) or
+            np.any(pixels[:, 1] >= height)):
+        raise ValueError('Calibration pixels must be inside the full image size.')
+    camera_pixels = pixels[:, ::-1]-[height/2, width/2]
+    x, y = world-world.mean(axis=0), camera_pixels-camera_pixels.mean(axis=0)
+    for points in [x, y]:
+        singular = np.linalg.svd(points, compute_uv=False)
+        if singular[0] <= 0 or singular[1] < singular[0]*1e-3:
+            raise ValueError('Calibration pairs are collinear or nearly collinear.')
+    u, singular, vt = np.linalg.svd(x.T @ y)
+    rotation = vt.T @ u.T
+    if np.linalg.det(rotation) < 0:
+        raise ValueError('Calibration axes are reflected; check row/column, signs and flip.')
+    scale = singular.sum()/np.sum(x*x)
+    translation = (camera_pixels.mean(axis=0)-scale*rotation @ world.mean(axis=0))/scale
+    calibration = CameraCalibration(float(scale), math.atan2(rotation[1, 0], rotation[0, 0]),
+                                    *translation.tolist(), width, height, flip_horizontal)
+    predicted = np.array([calibration.image_to_world(*p) for p in pixels])
+    errors = np.linalg.norm(predicted-world, axis=1)
+    if errors.max() > max_error_m:
+        raise ValueError(f'Calibration residual {errors.max()*1000:.2f} mm exceeds limit; check measurements/units.')
+    return calibration, errors
+
 
 # ========================= Student's code starts here =========================
 
@@ -12,12 +118,22 @@ tx = 0.0
 ty = 0.0
 
 # Function that converts image coord to world coord
-def IMG2W(col, row):
-    pass
+def IMG2W(col, row, calibration=None):
+    """OpenCV (column,row) to world meters; refuse unmeasured zero defaults."""
+    if calibration is None:
+        calibration = CameraCalibration(beta, theta, tx, ty)
+    return calibration.image_to_world(col, row)
 
 # ========================= Student's code ends here ===========================
 
-def blob_search(image_raw, color):
+def blob_search(image_raw, color, *, calibration=None, show=True, return_details=False,
+                vision=None):
+    """Use a color-specific HSV mask and return full-image block centroids."""
+    if image_raw is None or image_raw.ndim != 3 or image_raw.shape[2] != 3:
+        raise ValueError('Expected a BGR image.')
+    vision = NATIVE_VISION_DEFAULTS if vision is None else vision
+    if color not in vision['hsv']:
+        raise ValueError('Unknown color: '+str(color))
 
     # Setup SimpleBlobDetector parameters.
     params = cv2.SimpleBlobDetector_Params()
@@ -25,19 +141,27 @@ def blob_search(image_raw, color):
     # ========================= Student's code starts here =========================
 
     # Filter by Color
-    params.filterByColor = False
+    params.filterByColor = True
+    params.blobColor = 255
 
     # Filter by Area.
-    params.filterByArea = False
+    params.filterByArea = True
+    params.minArea, params.maxArea = map(float, vision['area_px'])
+    if not 0 < params.minArea < params.maxArea:
+        raise ValueError('Invalid blob area limits.')
 
     # Filter by Circularity
-    params.filterByCircularity = False
+    params.filterByCircularity = True
+    params.minCircularity = 0.55
+    params.maxCircularity = 1.0
 
     # Filter by Inerita
-    params.filterByInertia = False
+    params.filterByInertia = True
+    params.minInertiaRatio = 0.45
 
     # Filter by Convexity
-    params.filterByConvexity = False
+    params.filterByConvexity = True
+    params.minConvexity = 0.85
 
     # ========================= Student's code ends here ===========================
 
@@ -49,11 +173,26 @@ def blob_search(image_raw, color):
 
     # ========================= Student's code starts here =========================
 
-    lower = (110,50,50)     # blue lower
-    upper = (130,255,255)   # blue upper
+    lower, upper = vision['hsv'][color]
+    if (len(lower) != 3 or len(upper) != 3 or
+            any(not 0 <= a <= b <= limit for a, b, limit in zip(lower, upper, [179, 255, 255]))):
+        raise ValueError('Invalid HSV bounds for '+color)
 
     # Define a mask using the lower and upper bounds of the target color
-    mask_image = cv2.inRange(hsv_image, lower, upper)
+    mask_image = cv2.inRange(hsv_image, np.array(lower, np.uint8), np.array(upper, np.uint8))
+    roi = vision.get('roi')
+    if roi is not None:
+        x0, y0, x1, y1 = map(int, roi)
+        if not 0 <= x0 < x1 <= image_raw.shape[1] or not 0 <= y0 < y1 <= image_raw.shape[0]:
+            raise ValueError('ROI must be inside the full image.')
+        selected = np.zeros_like(mask_image)
+        selected[y0:y1, x0:x1] = mask_image[y0:y1, x0:x1]
+        mask_image = selected
+    size = int(vision.get('morphology_kernel', 3))
+    if size > 1:
+        kernel = np.ones((size, size), np.uint8)
+        mask_image = cv2.morphologyEx(mask_image, cv2.MORPH_OPEN, kernel)
+        mask_image = cv2.morphologyEx(mask_image, cv2.MORPH_CLOSE, kernel)
 
     # ========================= Student's code ends here ===========================
 
@@ -68,27 +207,67 @@ def blob_search(image_raw, color):
     # ========================= Student's code starts here =========================
 
     # Draw the keypoints on the detected block
-    # im_with_keypoints = cv2.drawKeypoints(image_raw, keypoints, ???)
+    im_with_keypoints = cv2.drawKeypoints(image_raw, keypoints, None, (0,255,0) )
 
     # ========================= Student's code ends here ===========================
 
     xw_yw = []
 
     if(num_blobs == 0):
-        print("No block found!")
+        pass
     else:
         # Convert image coordinates to global world coordinate using IM2W() function
         for i in range(num_blobs):
-            xw_yw.append(IMG2W(blob_image_center[i][0], blob_image_center[i][1]))
+            if calibration is not None:
+                xw_yw.append(IMG2W(*blob_image_center[i], calibration))
+            elif return_details:
+                xw_yw.append(None)
+            else:
+                xw_yw.append(IMG2W(*blob_image_center[i]))
 
 
-    cv2.namedWindow("Camera View")
-    cv2.imshow("Camera View", image_raw)
-    cv2.namedWindow("Mask View")
-    cv2.imshow("Mask View", mask_image)
-    # cv2.namedWindow("Keypoint View")
-    # cv2.imshow("Keypoint View", im_with_keypoints)
+    if show:
+        cv2.imshow("Camera View", image_raw)
+        cv2.imshow("Mask View: " + color, mask_image)
+        cv2.imshow("Keypoint View: " + color, im_with_keypoints)
+        cv2.waitKey(2)
 
-    cv2.waitKey(2)
+    if return_details:
+        detections = [Detection(color, *pixel, xy)
+                      for pixel, xy in zip(blob_image_center, xw_yw)]
+        return image_raw.copy(), im_with_keypoints, {color: mask_image}, detections
 
     return xw_yw
+
+
+def analyze_native_image(image_raw, settings, calibration=None):
+    """Main Lab 5 path: the starter's blob_search, for both colors, one frame."""
+    if image_raw is None or image_raw.ndim != 3 or image_raw.shape[2] != 3:
+        raise ValueError('Expected a BGR image.')
+    flip = bool(settings['vision'].get('flip_horizontal', False))
+    if calibration is not None:
+        if image_raw.shape[:2] != (calibration.height, calibration.width):
+            raise ValueError('Image size differs from calibration; recalibrate.')
+        if flip != calibration.flip_horizontal:
+            raise ValueError('Image flip differs from calibration; recalibrate.')
+    image = cv2.flip(image_raw, 1) if flip else image_raw.copy()
+    overlay, masks, blocks = image.copy(), {}, []
+    for color in ['green', 'yellow']:
+        _, _, color_masks, detections = blob_search(
+            image, color, calibration=calibration, show=False, return_details=True,
+            vision=settings['vision'])
+        masks.update(color_masks)
+        blocks.extend(detections)
+        for d in detections:
+            cv2.circle(overlay, (round(d.col), round(d.row)), 5, (0, 255, 255), 1)
+            label = f'{color}: ({d.col:.1f},{d.row:.1f})px'
+            if d.world_xy is not None:
+                label += f' ({d.world_xy[0]:.3f},{d.world_xy[1]:.3f})m'
+            cv2.putText(overlay, label, (round(d.col)+8, round(d.row)),
+                        cv2.FONT_HERSHEY_SIMPLEX, .35, (255, 255, 255), 1)
+    return image, overlay, masks, blocks
+
+
+"""
+beta = 660
+"""

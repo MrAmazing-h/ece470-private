@@ -1,0 +1,115 @@
+{
+  "time_utc": "2026-10-29T15:20:13.372067+00:00",
+  "scope": "Color image processing only; no arm or suction commands",
+  "vision": {
+    "flip_horizontal": false,
+    "roi": [
+      245,
+      125,
+      525,
+      335
+    ],
+    "hsv": {
+      "green": [
+        [
+          45,
+          100,
+          80
+        ],
+        [
+          80,
+          255,
+          255
+        ]
+      ],
+      "yellow": [
+        [
+          20,
+          130,
+          130
+        ],
+        [
+          37,
+          255,
+          255
+        ]
+      ],
+      "orange": [
+        [
+          4,
+          130,
+          130
+        ],
+        [
+          18,
+          255,
+          255
+        ]
+      ]
+    },
+    "area_px": [
+      100,
+      1200
+    ],
+    "morphology_kernel": 3
+  },
+  "live_frames_checked": 204,
+  "live_count_histogram": {
+    "orange": {
+      "2": 204
+    },
+    "green": {
+      "1": 204
+    },
+    "yellow": {
+      "0": 204
+    },
+    "red": {
+      "2": 204
+    },
+    "blue": {
+      "1": 204
+    }
+  },
+  "last_centers_col_row": {
+    "orange": [
+      [
+        333.032958984375,
+        229.5091552734375
+      ],
+      [
+        396.041259765625,
+        215.6945343017578
+      ]
+    ],
+    "green": [
+      [
+        401.982421875,
+        238.32875061035156
+      ]
+    ],
+    "yellow": [],
+    "red": [
+      [
+        268.4002990722656,
+        166.59429931640625
+      ],
+      [
+        301.38116455078125,
+        152.2484588623047
+      ]
+    ],
+    "blue": [
+      [
+        332.5833435058594,
+        169.3222198486328
+      ]
+    ]
+  },
+  "synthetic_color_tests_passed": 6,
+  "real_yellow_block_present": false,
+  "yellow_check": "Synthetic yellow square detected; large real yellow set square rejected.",
+  "evidence_directory": "lab5_runs/color_tuning_live",
+  "backup_directory": "lab5/color_tuning_backup",
+  "preview_command": "ros2 run ece470labs lab5_color_view --colors orange green yellow red blue"
+}

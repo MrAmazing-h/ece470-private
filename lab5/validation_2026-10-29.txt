@@ -1,0 +1,43 @@
+ECE 470 Lab 5 software validation — 2026-10-29
+
+Build:
+  ROS 2 Jazzy, colcon isolated Lab 5 overlay.
+  colcon --log-base .lab5-log build --base-paths src --build-base .lab5-build --install-base .lab5-install --symlink-install
+  Result: ece470labs built successfully.
+
+Regression tests:
+  python3 -m pytest -q lab5/test lab4/test_lab4.py lab4/test_lab4_exec.py
+  Result: 54 passed.
+  Includes synthetic green/yellow detection, noise/ROI filtering, pixel/world
+  calibration recovery, reflection/collinearity rejection, stale input checks,
+  all IK/vertical samples and stack levels, missing-block continuation,
+  successful-placement height accounting, frozen-snapshot behavior, suction
+  loss/motion failures, read-only command boundaries, and Lab 4 regressions.
+
+Installed entry points:
+  lab5_exec --help and lab5_calibrate --help work.
+  Offline synthetic four-block dry run succeeds without ROS initialization.
+  Calibration fitter recovers beta=1000, theta=0, tx=-0.1, ty=-0.3 from
+  the synthetic fixture with residuals near zero. These are not bench values.
+
+Live camera read-only check:
+  Direct /dev/video0 capture produced a 640x480 BGR frame.
+  The Lab 5 ROS image subscriber received 62 live /image_raw frames during
+  a three-second sample, with no trajectory publisher or SetIO client.
+  Background objects produce false detections with default HSV settings;
+  choose a table ROI and tune thresholds using the actual colored blocks.
+  A second camera process encountered a device-mapping error because the
+  user's camera driver was already streaming. The read-only test used the
+  existing stream successfully; that user process was left running.
+
+Bench configuration:
+  User-reported block-height range: 3.1–3.2 cm.
+  Nominal block_height_m saved as 0.0315 m.
+  Measured camera mapping, stack XY sites, and usable world workspace remain
+  required. The software rejects physical sorting while these are unset.
+  Suction output/input defaults follow the existing Lab 2 code: DO0, AI0,
+  holding above threshold 2.0. Empty/holding readings must be verified.
+
+No arm trajectories or suction commands were sent by the assistant.
+Physical pickup, stacking, missing-block demo, and TA assessment remain to
+be verified at the bench after calibration and configuration.

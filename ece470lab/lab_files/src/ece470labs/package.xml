@@ -13,8 +13,11 @@
   <test_depend>python3-pytest</test_depend>
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>python3-scipy</depend>
   <depend>cv_bridge</depend>
-  <depend>opencv-python</depend>
+  <depend>python3-opencv</depend>
+  <depend>ur_msgs</depend>
   <depend>python3-numpy</depend>  # Often required with OpenCV
   <export>
     <build_type>ament_python</build_type>

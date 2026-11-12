@@ -1,0 +1,3 @@
+id,command,logged_fk_residual_m,commanded_encoder_1_deg,commanded_encoder_2_deg,commanded_encoder_3_deg,commanded_encoder_4_deg,commanded_encoder_5_deg,commanded_encoder_6_deg,terminal_result,measurement_input_unit,measurement_source,yaw_measurement,ta_signoff
+P1,ros2 run ece470labs lab4_exec 0.27 0.33 0.23 90,1.360e-16,179.38511109,-60.34319423,58.46989844,-88.12670421,-90,-0.61488891,Requested joint pose reached,cm,User-reported ruler measurements,not supplied,not supplied
+P2,ros2 run ece470labs lab4_exec 0.18 -0.1 0.06 -45,4.013e-16,122.74110329,-61.35864394,112.19283558,-140.83419165,-90,77.74110329,Requested joint pose reached,cm (inferred from preceding measurement set),User-reported ruler measurements,not supplied,not supplied

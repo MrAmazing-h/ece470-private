@@ -1,0 +1,42 @@
+Source: excerpts of user-provided terminal output and ruler measurements in chat.
+Positions passed to the executable are world-frame meters; yaw is degrees.
+The displayed encoder angles below are commanded targets, not sampled joint feedback.
+P1 measurements were supplied as centimeters. P2 measurements are interpreted
+as centimeters consistently with P1; the user did not repeat a unit for P2.
+No quantitative measured yaw or TA sign-off was supplied.
+
+P1
+Command: ros2 run ece470labs lab4_exec 0.27 0.33 0.23 90
+IK/FK position residual: 1.360e-16 m
+Forward kinematics (world frame; matrix translation in mm):
+[[-2.17832692e-16 -1.00000000e+00  2.79051709e-16  2.70000000e+02]
+ [ 1.00000000e+00 -1.41871282e-16 -2.96141418e-18  3.30000000e+02]
+ [ 4.14998772e-16  1.24663573e-16  1.00000000e+00  2.30000000e+02]
+ [ 8.82761293e-19  1.19935824e-18 -3.54248702e-19  1.00000000e+00]]
+World gripper position (m): [0.27 0.33 0.23]
+Encoder angles (degrees): [179.38511109 -60.34319423 58.46989844 -88.12670421 -90. -0.61488891]
+Check the arm's path is clear and move the monitor to the left.
+Check Remote mode, Normal state, and the ROS2 driver.
+Press <Enter> to command this pose, or Ctrl-C to cancel.
+[INFO] [1792076450.352458718] [ur3e_lab4]: Waiting for robot feedback and controller...
+[INFO] [1792076452.049683795] [ur3e_lab4]: Moving to encoder degrees: [179.385 -60.343 58.47 -88.127 -90. -0.615]
+[INFO] [1792076455.088463947] [ur3e_lab4]: Requested joint pose reached.
+User ruler measurements: x=26.5 cm, y=32.8 cm, z=22.7 cm.
+
+P2
+Command: ros2 run ece470labs lab4_exec 0.18 -0.1 0.06 -45
+IK/FK position residual: 4.013e-16 m
+Forward kinematics (world frame; matrix translation in mm):
+[[ 7.07106781e-01  7.07106781e-01 -4.89072198e-17  1.80000000e+02]
+ [-7.07106781e-01  7.07106781e-01  3.84824390e-16 -1.00000000e+02]
+ [-1.07669492e-16 -1.13168969e-17  1.00000000e+00  6.00000000e+01]
+ [-3.05240953e-18  6.45889089e-19 -9.15729746e-19  1.00000000e+00]]
+World gripper position (m): [0.18 -0.1 0.06]
+Encoder angles (degrees): [122.74110329 -61.35864394 112.19283558 -140.83419165 -90. 77.74110329]
+Check the arm's path is clear and move the monitor to the left.
+Check Remote mode, Normal state, and the ROS2 driver.
+Press <Enter> to command this pose, or Ctrl-C to cancel.
+[INFO] [1792076981.003650824] [ur3e_lab4]: Waiting for robot feedback and controller...
+[INFO] [1792076983.049669590] [ur3e_lab4]: Moving to encoder degrees: [122.741 -61.359 112.193 -140.834 -90. 77.741]
+[INFO] [1792076986.088555241] [ur3e_lab4]: Requested joint pose reached.
+User ruler measurements: x=18.2, y=-10, z=6.8 (interpreted as cm).

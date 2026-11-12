@@ -1,0 +1,87 @@
+{
+  "time_utc": "2026-11-12T15:32:54.647489+00:00",
+  "camera": {
+    "beta": 641.7243965631948,
+    "theta": -0.0654575072821331,
+    "tx": -0.2316441062031388,
+    "ty": -0.14319698039608697,
+    "width": 640,
+    "height": 480,
+    "flip_horizontal": false
+  },
+  "points": [
+    {
+      "color": "red",
+      "col": 287.6130828857422,
+      "row": 159.93360137939453,
+      "world_xy_m": [
+        0.1,
+        0.1
+      ],
+      "predicted_world_xy_m": [
+        0.10058220736999667,
+        0.09952069466667776
+      ],
+      "residual_mm": 0.7541213590859065,
+      "center_range_px": [
+        0.438934326171875,
+        0.516815185546875
+      ]
+    },
+    {
+      "color": "green",
+      "col": 283.7255401611328,
+      "row": 222.93185424804688,
+      "world_xy_m": [
+        0.2,
+        0.1
+      ],
+      "predicted_world_xy_m": [
+        0.19893848729668112,
+        0.09989709796332549
+      ],
+      "residual_mm": 1.0664886536945153,
+      "center_range_px": [
+        0.511871337890625,
+        0.5849456787109375
+      ]
+    },
+    {
+      "color": "yellow",
+      "col": 348.13458251953125,
+      "row": 228.14484405517578,
+      "world_xy_m": [
+        0.2,
+        0.2
+      ],
+      "predicted_world_xy_m": [
+        0.2004793053333222,
+        0.20058220736999668
+      ],
+      "residual_mm": 0.754121359085882,
+      "center_range_px": [
+        0.37030029296875,
+        0.4170989990234375
+      ]
+    }
+  ],
+  "frames": 60,
+  "max_residual_mm": 1.0664886536945153,
+  "rms_residual_mm": 0.8707843393397803,
+  "observation_plane": "block_top",
+  "nominal_plane_z_m": 0.0315,
+  "world_positions_source": "User ruler measurements of block centers",
+  "independent_validation_passed": true,
+  "arm_commands_sent": 0,
+  "valve_commands_sent": 0,
+  "camera_released": true,
+  "configuration_saved": true,
+  "points_file": "lab5/calibration_points.csv",
+  "validation_file": "lab5/calibration_points.validation.csv",
+  "image_file": "lab5_runs/calibration_20261112T153045Z/calibration_overlay.png",
+  "independent_validation_file": "lab5/independent_validation.json",
+  "last_validation_world_xy_m": [
+    0.1,
+    0.2
+  ]
+}

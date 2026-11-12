@@ -1,0 +1,127 @@
+ECE 470 Lab 5 validation — 2026-11-12
+
+Scope:
+  Preserve the repository starter call chain; add measured color profile v1.
+  Complete calibration, planning, snapshot handling, and pick/place integration.
+  Three-point world calibration is fitted and one independent point passed.
+
+Source comparison:
+  Before this revision, local lab5_exec.py matched the supplied Popilworck/ece470
+  upstream main version exactly. blob_search.py differed in HSV/filter settings,
+  keypoint display, and a commented beta=660 note. Author cannot be inferred.
+  Original local source files are preserved under code_backups/.
+  The earlier integration preserved partner HSV/filter assignments.
+  This color revision intentionally replaces them; its backup is
+  code_backups/blob_search_before_color_20261112.py.txt.
+
+Build:
+  ROS 2 Jazzy, isolated .lab5-install overlay, symlink installation.
+  Result: 1 package built successfully.
+
+Tests:
+  source /opt/ros/jazzy/setup.bash
+  python3 -m pytest -q lab5/test lab4/test_lab4.py lab4/test_lab4_exec.py
+  Result after color/valve-cleanup revision: 79 passed.
+  Includes independent Appendix B rotation/translation checks, calibration fit,
+  native detector call-chain checks, duplicate-detection rejection, both-color
+  frozen planning, successful-only stack counts, multiple missing-block handling,
+  stale feedback, suction debounce/polarity, service rejection, suction loss,
+  sampled quintic velocity/acceleration limits, command-interface gating, and
+  existing Lab 4/optional color-tool regressions. Hardware feedback is mocked.
+
+Installed offline CLI:
+  lab5_exec --dry-run --no-gui --detections examples/synthetic_detections.json
+  with examples/synthetic_config.json generated 4 blocks x 6 named poses.
+  run.json recorded zero joint_command and zero suction_command events.
+  Offline mode does not initialize ROS; this is also checked by a test.
+
+Calibration fitter:
+  Installed lab5_calibrate --check-only recovered synthetic beta=1000 px/m,
+  theta approximately 0 rad, tx=-0.1 m, ty=-0.3 m.
+  All four synthetic residuals rounded to 0.000 mm.
+  These are synthetic values, not actual bench measurements.
+
+Bench status:
+  Camera mapping is now fitted; stack sites and workspace limits remain unmeasured.
+  The nominal block height remains 0.0315 m from the reported 3.1-3.2 cm.
+  Native green/yellow selection now uses config.json, measured profile v1.
+  Live camera validation: 120/120 frames contained exactly two green and two
+  yellow detections. Evidence: lab5_runs/color_final_20261112T151026Z/.
+  Installed native image CLI also detected two green and two yellow blocks.
+  Camera capture was released. No ROS camera/robot driver was running.
+  Exit-time valve OFF now requires fresh digital OFF and vacuum-release
+  feedback; unit tests cover confirmed closure and failure reporting.
+  Physical valve closure was not tested because no hardware run was started.
+  Physical pickup, stacking, and TA demonstration were not performed.
+  No arm or suction commands were sent during this revision.
+
+The earlier validation record is archived as validation_2026-10-29.txt.
+
+Three-point calibration capture:
+  User measured red=(0.10,0.10), green=(0.20,0.10), yellow=(0.20,0.20) m.
+  One of each color was detected over 60 frames; maximum center range
+  was below 0.59 pixels on either axis.
+  Fitted beta=641.7243966 px/m, theta=-0.0654575073 rad,
+  tx=-0.2316441062 m, ty=-0.1431969804 m.
+  Point residuals: red=0.7541, green=1.0665, yellow=0.7541 mm.
+  RMS residual=0.8708 mm. These are fit errors, not independent accuracy.
+  Saved config.json, calibration_points.csv, calibration_points.validation.csv,
+  and calibration_result.json. Evidence: lab5_runs/calibration_20261112T153045Z/.
+  Observation plane: same-height block tops, nominal z=0.0315 m.
+  Suggested independent check: a block at world (0.10,0.20) m.
+  Camera capture closed. No arm or valve commands were sent.
+
+Held-out validation at world (0.10,0.20) m:
+  Red was moved by the user; green/yellow stayed as control blocks.
+  The calibration parameters and original three fitting rows were unchanged.
+  Over 60 frames, median predicted red XY=(0.1009210213,0.2000428717) m.
+  Position error=0.9220 mm; maximum per-frame error=1.3549 mm.
+  The 5 mm software verification threshold passed; this is not a TA grading
+  tolerance and establishes accuracy only at this tested block-top location.
+  Records: independent_validation.json and independent_validation.csv.
+  Evidence: lab5_runs/calibration_check_20261112T153734Z/.
+  Camera released. No arm or valve commands sent.
+  Placement sites, workspace limits, and physical grip tests remain pending.
+
+Operator handoff:
+  User confirmed contact/block height=0.031 m.
+  Green stack=(0.20,0.10), yellow stack=(0.30,0.10) m.
+  Workspace=[0.10,0.30,0.05,0.35] m; source keepout=0.05 m around stacks.
+  Native ROI=[230,140,465,320].
+  140 IK/FK workspace/height samples passed; current 2G+2Y photo plan passed.
+  81 regression tests passed; isolated ROS package build succeeded.
+  Installed saved-image dry run: 4 blocks, 24 named poses, 0 hardware commands.
+  Physical motion is delegated to the user; no arm/valve commands sent.
+
+Single-block trial from a four-block scene:
+  Added --first-only for --execute and --dry-run.
+  Full scene validation happens before selection; expected count stays 4.
+  Execution uses one selected block and an internal expected count of 1.
+  87 tests passed, including success/error/interrupt cleanup ordering.
+  Isolated package build succeeded. Installed saved-image CLI validated
+  four sources and planned exactly one block with six poses; 0 hardware
+  commands. Real pickup remains for the user to run.
+
+Final operator-run experiment records (2026-11-12):
+  Complete runs: 3 green + 1 yellow; 2 green + 2 yellow; 1 green + 3 yellow.
+  Each recorded missing=[], finished exit_code=0, and valve_closed confirmed=true.
+  A later run recorded one missing green source and completed the remaining
+  1 green + 2 yellow, then confirmed valve closure. Its exit_code=1 represents
+  the reported missing block; the cause of that missing pickup is not recorded.
+  Summary: demo_results.csv. Original images/logs: experiment_records.zip.
+  These are ROS/program feedback records, not independent physical inspection
+  or proof of TA sign-off. All final physical commands were run by the operator.
+
+Final tuning and submission:
+  Fixed callback starvation with a persistent executor and fixed spin timeout.
+  Isolated fake-service reproduction received the fixed-mode reply; no hardware
+  services were invoked by that reproduction.
+  Contact offset=-0.002 m; yellow-only pickup offset=-0.003 m.
+  Pickup Z: green 0.029 m; yellow 0.026 m. Clearance Z: 0.15 m.
+  Vertical travel: at most 3 segments. Workspace: [0.10,0.50,0.05,0.50] m.
+  Camera ROI: [230,140,500,340]; it does not cover the whole workspace.
+  Added terminal text "no block found" for a failed pickup, retaining structured
+  missing_block events and continuation with the remaining frozen sources.
+  No automated tests were rerun after final tuning, at the operator's request.
+  Earlier passing test counts above describe earlier revisions only.
+  Current Submission_Code.pdf/HTML were regenerated on 2026-11-12.

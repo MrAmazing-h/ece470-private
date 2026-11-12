@@ -1,0 +1,109 @@
+{
+  "simulation_only": true,
+  "camera": {
+    "beta": 1000.0,
+    "theta": 0.0,
+    "tx": -0.1,
+    "ty": -0.3,
+    "width": 640,
+    "height": 480,
+    "flip_horizontal": false
+  },
+  "vision": {
+    "flip_horizontal": false,
+    "roi": null,
+    "hsv": {
+      "green": [
+        [
+          40,
+          60,
+          45
+        ],
+        [
+          85,
+          255,
+          255
+        ]
+      ],
+      "yellow": [
+        [
+          20,
+          80,
+          70
+        ],
+        [
+          38,
+          255,
+          255
+        ]
+      ],
+      "orange": [
+        [
+          5,
+          100,
+          80
+        ],
+        [
+          19,
+          255,
+          255
+        ]
+      ]
+    },
+    "area_px": [
+      100,
+      6000
+    ],
+    "morphology_kernel": 3
+  },
+  "task": {
+    "block_height_m": 0.03,
+    "table_z_m": 0.0,
+    "contact_offset_m": 0.0,
+    "safe_z_m": 0.15,
+    "yaw_deg": 90.0,
+    "stack_xy_m": {
+      "green": [
+        0.06,
+        0.1
+      ],
+      "yellow": [
+        0.06,
+        0.3
+      ]
+    },
+    "workspace_xy_m": [
+      0,
+      0.3,
+      0.05,
+      0.5
+    ],
+    "expected_blocks": 4,
+    "max_per_color": 3,
+    "settle_seconds": 0,
+    "frame_max_age_seconds": 1.0,
+    "go_away_encoder_deg": [
+      270,
+      -90,
+      90,
+      -90,
+      -90,
+      135
+    ]
+  },
+  "gripper": {
+    "output_pin": 0,
+    "analog_pin": 0,
+    "threshold": 2.0,
+    "holding_above_threshold": true,
+    "timeout_seconds": 1.5,
+    "debounce_seconds": 0.15,
+    "max_age_seconds": 0.5
+  },
+  "motion": {
+    "velocity_limit": 0.5,
+    "acceleration_limit": 0.4,
+    "joint_tolerance_rad": 0.003,
+    "feedback_max_age_seconds": 1.0
+  }
+}

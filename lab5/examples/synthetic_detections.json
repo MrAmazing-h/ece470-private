@@ -1,0 +1,6 @@
+[
+  {"color": "green", "col": 170.0, "row": 260.0, "world_xy": [0.12, 0.15]},
+  {"color": "green", "col": 240.0, "row": 320.0, "world_xy": [0.18, 0.22]},
+  {"color": "yellow", "col": 330.0, "row": 270.0, "world_xy": [0.13, 0.31]},
+  {"color": "yellow", "col": 400.0, "row": 320.0, "world_xy": [0.18, 0.38]}
+]

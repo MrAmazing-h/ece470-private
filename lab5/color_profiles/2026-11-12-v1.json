@@ -1,0 +1,96 @@
+{
+  "version": "2026-11-12-v1",
+  "source_image": "lab5_runs/color_final_20261112T151026Z/before.png",
+  "vision": {
+    "flip_horizontal": false,
+    "roi": [
+      100,
+      160,
+      570,
+      355
+    ],
+    "hsv": {
+      "green": [
+        [
+          45,
+          100,
+          80
+        ],
+        [
+          75,
+          255,
+          255
+        ]
+      ],
+      "yellow": [
+        [
+          15,
+          140,
+          150
+        ],
+        [
+          32,
+          255,
+          255
+        ]
+      ],
+      "orange": [
+        [
+          4,
+          130,
+          130
+        ],
+        [
+          18,
+          255,
+          255
+        ]
+      ]
+    },
+    "area_px": [
+      180,
+      1200
+    ],
+    "morphology_kernel": 3
+  },
+  "measured_patch_hsv_medians": {
+    "green": [
+      [
+        57,
+        180,
+        138
+      ],
+      [
+        57,
+        171,
+        139
+      ]
+    ],
+    "yellow": [
+      [
+        20,
+        198,
+        193
+      ],
+      [
+        22,
+        198,
+        191
+      ]
+    ]
+  },
+  "camera_calibration_measured": false,
+  "hardware_pick_test_performed": false,
+  "validation": {
+    "time_utc": "2026-11-12T15:14:23.836812+00:00",
+    "frames": 120,
+    "correct_two_green_two_yellow": 120,
+    "count_histogram": {
+      "(2, 2)": 120
+    },
+    "camera_released": true,
+    "arm_commands_sent": 0,
+    "suction_commands_sent": 0,
+    "physical_pick_test_performed": false
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "time_utc": "2026-11-12T15:37:37.545487+00:00",
+  "camera": {
+    "beta": 641.7243965631948,
+    "theta": -0.0654575072821331,
+    "tx": -0.2316441062031388,
+    "ty": -0.14319698039608697,
+    "width": 640,
+    "height": 480,
+    "flip_horizontal": false
+  },
+  "refitted": false,
+  "fitting_points_unchanged": true,
+  "frames": 60,
+  "points": [
+    {
+      "color": "red",
+      "independent": true,
+      "col": 351.96824645996094,
+      "row": 164.37004852294922,
+      "expected_world_xy_m": [
+        0.1,
+        0.2
+      ],
+      "predicted_world_xy_m": [
+        0.1009210212624197,
+        0.2000428717379928
+      ],
+      "error_xy_mm": [
+        0.9210212624196912,
+        0.04287173799277788
+      ],
+      "position_error_mm": 0.9220185202845348,
+      "per_frame_max_position_error_mm": 1.354878045295963,
+      "center_range_px": [
+        0.215179443359375,
+        0.46075439453125
+      ],
+      "pixel_shift_from_fit": 64.5078998411978
+    },
+    {
+      "color": "green",
+      "independent": false,
+      "col": 283.7336883544922,
+      "row": 222.965576171875,
+      "expected_world_xy_m": [
+        0.2,
+        0.1
+      ],
+      "predicted_world_xy_m": [
+        0.19899009313597057,
+        0.09991320537724763
+      ],
+      "error_xy_mm": [
+        -1.0099068640294362,
+        -0.08679462275237859
+      ],
+      "position_error_mm": 1.0136297058356656,
+      "per_frame_max_position_error_mm": 1.3383311451767885,
+      "center_range_px": [
+        0.4404296875,
+        0.4543914794921875
+      ],
+      "pixel_shift_from_fit": 0.034692379591080624
+    },
+    {
+      "color": "yellow",
+      "independent": false,
+      "col": 348.1556396484375,
+      "row": 228.11429595947266,
+      "expected_world_xy_m": [
+        0.2,
+        0.2
+      ],
+      "predicted_world_xy_m": [
+        0.2004296577932997,
+        0.20061183669213217
+      ],
+      "error_xy_mm": [
+        0.4296577932996759,
+        0.6118366921321616
+      ],
+      "position_error_mm": 0.7476295587939074,
+      "per_frame_max_position_error_mm": 0.9348358768740583,
+      "center_range_px": [
+        0.275390625,
+        0.2989654541015625
+      ],
+      "pixel_shift_from_fit": 0.03710241001419872
+    }
+  ],
+  "check_tolerance_mm": 5.0,
+  "tolerance_note": "Software verification threshold; not an instructor grading specification.",
+  "stable": true,
+  "control_blocks_unchanged": true,
+  "independent_validation_passed": true,
+  "observation_plane": "same-height block tops",
+  "arm_commands_sent": 0,
+  "valve_commands_sent": 0,
+  "camera_released": true,
+  "evidence_directory": "lab5_runs/calibration_check_20261112T153734Z"
+}
